@@ -1,0 +1,17 @@
+from .auth import router as auth_router
+from .camera import router as camera_router
+from .chat import router as chat_router
+from .control import router as control_router
+from .networking import router as networking_router
+from .pages import router as pages_router
+from .recording import router as recording_router
+from .ros2 import router as ros2_router
+from .training import router as training_router
+from .local_training import router as local_training_router
+from .macro import router as macro_router
+from .dashboard import router as dashboard_router
+from .gpu import router as gpu_router
+from .isaacsim import router as isaacsim_router
+from .skillgraph import router as skillgraph_router
+from .setup import router as setup_router
+from .update import router as update_router

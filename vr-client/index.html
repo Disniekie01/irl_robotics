@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IRL Robotics - VR Teleoperation</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e0e0e0; overflow: hidden; height: 100vh; }
+    #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; background: rgba(10,10,10,0.95); }
+    #overlay.hidden { display: none; }
+    h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+    .subtitle { color: #888; margin-bottom: 2rem; font-size: 1.1rem; }
+    .config { display: flex; flex-direction: column; gap: 1rem; width: 320px; margin-bottom: 2rem; }
+    .config label { font-size: 0.85rem; color: #aaa; }
+    .config input { padding: 0.6rem; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #fff; font-size: 1rem; }
+    .config input:focus { outline: none; border-color: #4a9eff; }
+    #enter-vr { padding: 1rem 2.5rem; font-size: 1.2rem; border: none; border-radius: 8px; background: #2563eb; color: white; cursor: pointer; transition: background 0.2s; }
+    #enter-vr:hover { background: #1d4ed8; }
+    #enter-vr:disabled { background: #333; color: #666; cursor: not-allowed; }
+    #status { position: absolute; bottom: 20px; left: 20px; z-index: 20; font-size: 0.85rem; color: #888; }
+    #hud { position: absolute; top: 10px; right: 10px; z-index: 20; background: rgba(0,0,0,0.85); padding: 14px; border-radius: 10px; font-size: 0.95rem; line-height: 1.25; font-family: monospace; max-width: 420px; }
+    #hud.hidden { display: none; }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
+    .dot.green { background: #22c55e; }
+    .dot.red { background: #ef4444; }
+    .dot.yellow { background: #eab308; }
+    .btn-secondary { padding: 0.8rem 1.2rem; font-size: 1rem; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.06); color: #fff; border-radius: 8px; cursor: pointer; }
+    .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+    canvas { width: 100%; height: 100%; }
+    .slider-row { display: flex; align-items: center; gap: 0.5rem; }
+    .slider-row input[type="range"] { flex: 1; }
+    .slider-row span { min-width: 40px; text-align: right; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <h1>IRL Robotics VR</h1>
+    <p class="subtitle">WebXR Teleoperation for Apple Vision Pro</p>
+
+    <div class="config">
+      <div>
+        <label for="server-url">Server URL</label>
+        <input id="server-url" type="text" value="ws://localhost:80/move/teleop/ws" placeholder="ws://host:port/move/teleop/ws">
+      </div>
+      <div>
+        <label>Sensitivity</label>
+        <div class="slider-row">
+          <input id="sensitivity" type="range" min="0.1" max="5.0" step="0.1" value="1.0">
+          <span id="sensitivity-val">1.0</span>
+        </div>
+      </div>
+      <div>
+        <label>Grip threshold (pinch distance)</label>
+        <div class="slider-row">
+          <input id="grip-threshold" type="range" min="0.005" max="0.05" step="0.001" value="0.02">
+          <span id="grip-val">0.02</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="width: 320px; max-width: 95vw; margin-top: 8px; padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04);">
+      <div style="font-size: 0.95rem; font-weight: 600; margin-bottom: 10px;">Phone Test (no headset)</div>
+      <div style="display:flex; gap: 10px; align-items:center; margin-bottom: 10px;">
+        <div style="flex:1;">
+          <label for="test-robot-id" style="display:block; font-size:0.85rem; color:#bdbdbd; margin-bottom:4px;">Robot index</label>
+          <select id="test-robot-id" style="width: 100%; padding: 0.6rem; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #fff; font-size: 1rem;">
+            <option value="0" selected>0 (Right manipulator)</option>
+            <option value="1">1 (Left manipulator)</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex; gap: 10px; align-items:center;">
+        <button id="test-start" class="btn-secondary" style="background: rgba(37,99,235,0.22); border-color: rgba(37,99,235,0.55);">Run Teleop Test</button>
+        <button id="test-stop" class="btn-secondary" disabled>Stop</button>
+      </div>
+      <div id="test-status" style="margin-top: 10px; font-size: 0.9rem; color: #e0e0e0;"></div>
+      <div style="margin-top: 6px; font-size: 0.8rem; color:#8a8a8a;">Sends HTTP to: <span id="test-http-url"></span></div>
+    </div>
+
+    <button id="enter-vr" disabled>Checking WebXR...</button>
+    <p id="vr-error" style="color: #ef4444; margin-top: 1rem; max-width: 400px; text-align: center;"></p>
+  </div>
+
+  <div id="hud" class="hidden">
+    <div><span class="dot" id="ws-dot"></span>WebSocket: <span id="ws-status">disconnected</span></div>
+    <div><span class="dot" id="xr-dot"></span>XR Session: <span id="xr-status">inactive</span></div>
+    <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.15);">
+      <div style="font-weight: 600; margin-bottom: 4px;">Teleop Stats</div>
+      <div>Sent: <span id="sent-count">0</span> msgs</div>
+      <div>Recv: <span id="recv-count">0</span> msgs</div>
+      <div>Last send: <span id="last-send">-</span></div>
+      <div>Last server: <span id="last-server">-</span></div>
+    </div>
+    <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.15);">
+      <button id="settings-btn" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #e0e0e0; padding: 4px 8px; border-radius: 8px; font-size: 0.75rem; cursor: pointer;">
+        Settings
+      </button>
+      <div id="settings-panel" style="display:none; margin-top: 6px;">
+        <div style="margin-bottom: 6px;">
+          <div style="font-size: 0.75rem; color: #bdbdbd; margin-bottom: 2px;">Network (WebSocket)</div>
+          <input id="settings-server-url" type="text" style="width: 280px; max-width: 60vw; padding: 6px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #fff; font-size: 0.85rem;"
+            value="ws://localhost:80/move/teleop/ws" />
+        </div>
+        <div style="margin-bottom: 6px;">
+          <div style="font-size: 0.75rem; color: #bdbdbd; margin-bottom: 2px;">Robot</div>
+          <select id="robot-select" style="width: 280px; max-width: 60vw; padding: 6px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #fff; font-size: 0.85rem;">
+            <option value="auto" selected>Auto (Right=Robot 0, Left=Robot 1)</option>
+            <option value="right">Robot 0 (force Right hand)</option>
+            <option value="left">Robot 1 (force Left hand)</option>
+          </select>
+        </div>
+        <button id="apply-settings" style="background: #2563eb; border: none; color: white; padding: 6px 10px; border-radius: 8px; font-size: 0.85rem; cursor: pointer;">
+          Apply + Reconnect
+        </button>
+      </div>
+    </div>
+    <div>L: <span id="left-pos">-</span></div>
+    <div>R: <span id="right-pos">-</span></div>
+    <div>FPS: <span id="fps-display">-</span></div>
+  </div>
+
+  <canvas id="gl-canvas"></canvas>
+  <div id="status"></div>
+
+  <script type="module" src="vr-teleop.js"></script>
+</body>
+</html>

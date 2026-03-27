@@ -1,0 +1,18 @@
+{
+  "name": "unitree-d1",
+  "servos_voltage": 24.0,
+  "servos_offsets": [18000.0, 18000.0, 18000.0, 18000.0, 18000.0, 18000.0, 18000.0],
+  "servos_calibration_position": [18000.0, 18000.0, 18000.0, 18000.0, 18000.0, 18000.0, 18000.0],
+  "servos_offsets_signs": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+  "pid_gains": [
+    {"p_gain": 32.0, "i_gain": 0.0, "d_gain": 32.0},
+    {"p_gain": 32.0, "i_gain": 0.0, "d_gain": 32.0},
+    {"p_gain": 32.0, "i_gain": 0.0, "d_gain": 32.0},
+    {"p_gain": 32.0, "i_gain": 0.0, "d_gain": 32.0},
+    {"p_gain": 32.0, "i_gain": 0.0, "d_gain": 32.0},
+    {"p_gain": 32.0, "i_gain": 0.0, "d_gain": 32.0},
+    {"p_gain": 32.0, "i_gain": 0.0, "d_gain": 32.0}
+  ],
+  "gripping_threshold": 500,
+  "non_gripping_threshold": 200
+}

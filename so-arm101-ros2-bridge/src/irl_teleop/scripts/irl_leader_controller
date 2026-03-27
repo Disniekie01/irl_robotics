@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+
+from irl_teleop.irl_leader_controller import main
+
+if __name__ == '__main__':
+    main()

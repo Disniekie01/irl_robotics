@@ -1,0 +1,55 @@
+name: Python type checking
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "irl_robotics/**"
+  push:
+    branches:
+      - main
+    paths:
+      - "irl_robotics/**"
+
+permissions:
+  contents: read
+
+jobs:
+  mypy_irl_robotics_tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: irl_robotics/
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "irl_robotics/pyproject.toml"
+
+      - name: Set up Python
+        run: uv python pin 3.11 && uv python install
+
+      - name: Install the project
+        run: |
+          uv sync --dev
+
+      # - name: Get changed Python files
+      #   id: changed-files
+      #   uses: tj-actions/changed-files@v45
+      #   with:
+      #     files: |
+      #       *.py
+
+      # - name: Run mypy on changed files
+      #   if: steps.changed-files.outputs.any_changed == 'true'
+      #   run: |
+      #     uv run mypy ${{ steps.changed-files.outputs.all_changed_files }} --ignore-missing-imports --follow-imports=silent || exit 1
+
+      - name: Run mypy
+        # run: uv run mypy ./ --check-untyped-defs --disallow-untyped-defs --ignore-missing-imports --follow-imports=silent || exit 1
+        run: uv run mypy ./ --check-untyped-defs --disallow-untyped-defs --ignore-missing-imports --follow-imports=silent || exit 1
