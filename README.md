@@ -137,7 +137,13 @@ source /opt/ros/jazzy/setup.bash
 colcon build
 ```
 
-If using Humble, source `/opt/ros/humble/setup.bash` instead and keep the rest the same.
+Build teleop bridge workspace (Humble example):
+
+```bash
+cd ~/irl_robotics/so-arm101-ros2-bridge
+source /opt/ros/humble/setup.bash
+colcon build
+```
 
 ## Troubleshooting
 
