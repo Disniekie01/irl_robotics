@@ -105,6 +105,10 @@ When running IRL Robotics on an SSH machine and using **Start relays** (or **Sta
 
 On the SSH machine you need ROS2 and the **topic_tools** package. The backend **auto-detects** the installed distro (Jazzy, Humble, etc.) and uses it for relays and teleop.
 
+Quick distro reminder:
+- **Jazzy** (usually Ubuntu 24.04): use `ros-jazzy-*` packages and `/opt/ros/jazzy/setup.bash`.
+- **Humble** (usually Ubuntu 22.04): use `ros-humble-*` packages and `/opt/ros/humble/setup.bash`.
+
 **Important:** Install topic_tools **before** starting the server, otherwise relays will fail:
 
 ```bash

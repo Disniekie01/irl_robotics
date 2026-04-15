@@ -115,9 +115,18 @@ uv run --python 3.10 irlrobotics run --simulation=headless --only-simulation --s
 
 If you use ROS2 Bridge features from the dashboard:
 
+- If your machine has ROS2 **Jazzy** (common on Ubuntu 24.04), use `ros-jazzy-*` packages and source `/opt/ros/jazzy/setup.bash`.
+- If your machine has ROS2 **Humble** (common on Ubuntu 22.04), use `ros-humble-*` packages and source `/opt/ros/humble/setup.bash`.
+
 ```bash
 sudo apt update
 sudo apt install -y ros-jazzy-topic-tools
+```
+
+Humble equivalent:
+
+```bash
+sudo apt install -y ros-humble-topic-tools
 ```
 
 Build teleop bridge workspace (Jazzy example):
@@ -128,7 +137,7 @@ source /opt/ros/jazzy/setup.bash
 colcon build
 ```
 
-If using Humble, source `/opt/ros/humble/setup.bash` instead.
+If using Humble, source `/opt/ros/humble/setup.bash` instead and keep the rest the same.
 
 ## Troubleshooting
 
