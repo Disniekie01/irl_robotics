@@ -163,17 +163,21 @@ To stop the server later: press **Ctrl+C** in that terminal.
 
 ---
 
-## Part 3b: If you use ROS2 Jazzy (topic tools and teleop node)
+## Part 3b: If you use ROS2 Jazzy or Humble (topic tools and teleop node)
 
-If you have **ROS2 Jazzy** installed and use the **ROS2 Bridge** page (e.g. for Isaac Sim or the teleop node), do these steps once.
+If you have **ROS2 Jazzy** (usually Ubuntu 24.04) or **ROS2 Humble** (usually Ubuntu 22.04) and use the **ROS2 Bridge** page (e.g. for Isaac Sim or the teleop node), do these steps once.
 
 **Step 7b — Install topic tools (for relays)**
 
-The dashboard’s “Start relays” needs the `topic_tools` package. In the terminal, run:
+The dashboard’s “Start relays” needs the `topic_tools` package. In the terminal, run the command that matches your ROS2 distro:
 
 ```bash
+# Jazzy:
 sudo apt update
 sudo apt install -y ros-jazzy-topic-tools
+
+# Humble:
+sudo apt install -y ros-humble-topic-tools
 ```
 
 Without this, relays will fail when you click “Start relays” or “Start all” on the ROS2 Bridge page.
@@ -185,8 +189,14 @@ Without this, relays will fail when you click “Start relays” or “Start all
 If **“Start teleop”** on the ROS2 Bridge page does nothing or says the teleop node failed, the bridge workspace may not be built yet. Build it once:
 
 ```bash
+# Jazzy:
 cd ~/irl_robotics/so-arm101-ros2-bridge
 source /opt/ros/jazzy/setup.bash
+colcon build
+
+# Humble:
+cd ~/irl_robotics/so-arm101-ros2-bridge
+source /opt/ros/humble/setup.bash
 colcon build
 ```
 
@@ -306,8 +316,8 @@ Use your actual port instead of `/dev/ttyACM0` if needed.
 | **Read limits (no change)** | `cd ~/irl_robotics/irl_robotics` then `uv run --python 3.10 python scripts/set_eeprom_limits.py --port /dev/ttyACM0` |
 | **Set full limits (one arm)** | Stop server, plug one arm, then `cd ~/irl_robotics/irl_robotics` then `uv run --python 3.10 python scripts/set_eeprom_limits.py --port /dev/ttyACM0 --write` |
 | **Set full limits (gripper only)** | `cd ~/irl_robotics/irl_robotics` then `uv run --python 3.10 python scripts/set_eeprom_limits.py --port /dev/ttyACM0 --write --servo 5` |
-| **ROS2 Jazzy: install topic tools** | `sudo apt install -y ros-jazzy-topic-tools` |
-| **ROS2 Jazzy: build bridge (teleop node)** | `cd ~/irl_robotics/so-arm101-ros2-bridge` then `source /opt/ros/jazzy/setup.bash` then `colcon build` |
+| **ROS2 Jazzy/Humble: install topic tools** | Jazzy: `sudo apt install -y ros-jazzy-topic-tools` / Humble: `sudo apt install -y ros-humble-topic-tools` |
+| **ROS2 Jazzy/Humble: build bridge (teleop node)** | `cd ~/irl_robotics/so-arm101-ros2-bridge` then source Jazzy (`/opt/ros/jazzy/setup.bash`) or Humble (`/opt/ros/humble/setup.bash`) then `colcon build` |
 | **Run with simulated robot** | `cd ~/irl_robotics` then `make sim` then open **http://localhost:8020** in browser |
 
 ---
@@ -405,11 +415,11 @@ If you only need the API (e.g. another app talks to the robot), the server can r
 - **docs or bullet3 folder is empty**  
   The repo uses submodules for those folders. Run `cd ~/irl_robotics` then `git submodule update --init --recursive` to download them. Or next time clone with: `git clone --recurse-submodules https://github.com/Disniekie01/irl_robotics.git`.
 
-- **ROS2 Jazzy: "Start relays" or relays fail**  
-  Install topic tools: `sudo apt install -y ros-jazzy-topic-tools`. Then try "Start relays" or "Start all" again on the ROS2 Bridge page.
+- **ROS2 Jazzy/Humble: "Start relays" or relays fail**  
+  Install topic tools for your distro: Jazzy `sudo apt install -y ros-jazzy-topic-tools` or Humble `sudo apt install -y ros-humble-topic-tools`. Then try "Start relays" or "Start all" again on the ROS2 Bridge page.
 
-- **ROS2 Jazzy: "Start teleop" does nothing or teleop node fails**  
-  Build the bridge workspace once: `cd ~/irl_robotics/so-arm101-ros2-bridge`, then `source /opt/ros/jazzy/setup.bash`, then `colcon build`. Restart the IRL Robotics server and try "Start teleop" again.
+- **ROS2 Jazzy/Humble: "Start teleop" does nothing or teleop node fails**  
+  Build the bridge workspace once: `cd ~/irl_robotics/so-arm101-ros2-bridge`, then source your distro (`/opt/ros/jazzy/setup.bash` or `/opt/ros/humble/setup.bash`), then `colcon build`. Restart the IRL Robotics server and try "Start teleop" again.
 
 - **Dashboard says "Robot disconnected" but I'm only testing (no hardware)**  
   Run with the simulated robot so it shows as connected: `cd ~/irl_robotics` then `make sim`, then open http://localhost:8020. See Part 3b, Step 7d.
