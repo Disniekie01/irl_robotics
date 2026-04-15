@@ -2,7 +2,7 @@
 
 This guide explains how to build the dashboard and run the server from the irl_robotics repo.
 
-**New to the terminal?** Use the step-by-step guide with copy-paste commands: [docs/INSTALL_FOR_BEGINNERS.md](docs/INSTALL_FOR_BEGINNERS.md) (clone, install, run, and change servo limits).
+**New to the terminal?** Use the step-by-step guide with copy-paste commands: [INSTALL_FOR_BEGINNERS.md](INSTALL_FOR_BEGINNERS.md) (clone, install, run, and change servo limits).
 
 ## Prerequisites
 
