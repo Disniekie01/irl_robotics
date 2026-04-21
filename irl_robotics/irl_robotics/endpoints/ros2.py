@@ -230,6 +230,7 @@ def _teleop_workspace_ready() -> tuple[bool, str]:
 @router.post("/start/teleop", response_model=ROS2ActionResponse)
 async def start_teleop(
     irl_url: str = "http://localhost:8020",
+    flip_rotation_for_isaac: bool = False,
     isaac_rotation_offset_rad: float = 0.0,
     isaac_pitch_offset_rad: float = 0.0,
     isaac_elbow_offset_rad: float = 0.0,
@@ -241,9 +242,11 @@ async def start_teleop(
     ready, err_msg = _teleop_workspace_ready()
     if not ready:
         return ROS2ActionResponse(status="error", message=err_msg)
+    flip_rot = "true" if flip_rotation_for_isaac else "false"
     cmd = (
         f'ros2 run irl_teleop irl_http_teleop '
         f'--ros-args -p irl_url:="{irl_url}" '
+        f'-p flip_rotation_for_isaac:={flip_rot} '
         f'-p isaac_rotation_offset_rad:={isaac_rotation_offset_rad} '
         f'-p isaac_pitch_offset_rad:={isaac_pitch_offset_rad} '
         f'-p isaac_elbow_offset_rad:={isaac_elbow_offset_rad} '
@@ -280,6 +283,32 @@ JOINT_OFFSET_PARAMS = {
 async def set_teleop_wrist_roll_offset(value: float) -> ROS2ActionResponse:
     """Set Isaac Sim gripper roll offset in realtime (radians). Legacy endpoint for backwards compatibility."""
     return await set_teleop_joint_offset(joint="wrist_roll", value=value)
+
+
+@router.post("/teleop/flip_rotation_for_isaac", response_model=ROS2ActionResponse)
+async def set_flip_rotation_for_isaac(value: bool = False) -> ROS2ActionResponse:
+    """Set flip_rotation_for_isaac on the running HTTP teleop node (negate base joint for Isaac USD vs real robot)."""
+    val = "true" if value else "false"
+    cmd = _SOURCE_CMD + f"ros2 param set /irl_http_teleop flip_rotation_for_isaac {val}"
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            executable="/bin/bash",
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        if proc.returncode == 0:
+            return ROS2ActionResponse(
+                status="ok",
+                message=f"flip_rotation_for_isaac set to {value}",
+            )
+        err = stderr.decode().strip() or "Unknown error"
+        return ROS2ActionResponse(status="error", message=f"param set failed: {err}")
+    except asyncio.TimeoutError:
+        return ROS2ActionResponse(status="error", message="param set timed out")
+    except Exception as e:
+        return ROS2ActionResponse(status="error", message=str(e))
 
 
 @router.post("/teleop/joint_offset", response_model=ROS2ActionResponse)
@@ -354,6 +383,7 @@ _RELAYS_START_DELAY_SEC = 5.0  # Let teleop advertise topics before relays (Jazz
 @router.post("/start/all", response_model=ROS2ActionResponse)
 async def start_all(
     irl_url: str = "http://localhost:8020",
+    flip_rotation_for_isaac: bool = False,
     isaac_rotation_offset_rad: float = 0.0,
     isaac_pitch_offset_rad: float = 0.0,
     isaac_elbow_offset_rad: float = 0.0,
@@ -364,6 +394,7 @@ async def start_all(
     """Start both the teleop node and all relays with per-joint offsets."""
     await start_teleop(
         irl_url=irl_url,
+        flip_rotation_for_isaac=flip_rotation_for_isaac,
         isaac_rotation_offset_rad=isaac_rotation_offset_rad,
         isaac_pitch_offset_rad=isaac_pitch_offset_rad,
         isaac_elbow_offset_rad=isaac_elbow_offset_rad,

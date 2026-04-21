@@ -18,6 +18,7 @@ class IRLHttpTeleop(Node):
         self.declare_parameter('irl_url', 'http://192.168.1.97:8020')
         self.declare_parameter('poll_rate', 0.02)  # 50 Hz for responsive mirroring
         self.declare_parameter('robot_id', 0)
+        self.declare_parameter('flip_rotation_for_isaac', False)
         self.declare_parameter('flip_wrist_pitch_for_isaac', False)
         self.declare_parameter('flip_wrist_roll_for_isaac', True)  # default True: SO-100 URDF has origin rpy="0 -3.14 0" so Isaac axis is inverted vs real robot
 
@@ -73,6 +74,8 @@ class IRLHttpTeleop(Node):
         
         self.get_logger().info(f'IRL Robotics HTTP Teleop started at {1.0/self.poll_rate:.0f} Hz')
         self.get_logger().info(f'API: {self.irl_url} | robot_id: {self.robot_id}')
+        if self.get_parameter('flip_rotation_for_isaac').value:
+            self.get_logger().info('Isaac Sim: Rotation sign flip enabled (negate base joint for USD vs real robot)')
         if self.flip_wrist_roll:
             self.get_logger().info('Isaac Sim: Wrist_Roll (gripper rotate) sign flipped to match real robot')
         for i, name in enumerate(self.joint_names):
@@ -119,6 +122,9 @@ class IRLHttpTeleop(Node):
                 lo, hi = self.joint_limits[i]
                 clamped.append(max(lo, min(hi, angle)))
             
+            # Optional: flip Rotation (index 0) if Isaac USD joint axis is opposite to /joints/read convention
+            if self.get_parameter('flip_rotation_for_isaac').value and len(clamped) > 0:
+                clamped[0] = -clamped[0]
             # Optional: flip Wrist_Pitch (index 3) and/or Wrist_Roll (index 4) for Isaac Sim if axes are inverted
             if self.flip_wrist_pitch and len(clamped) > 3:
                 clamped[3] = -clamped[3]

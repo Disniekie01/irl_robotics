@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import {
   AlertCircle,
   CheckCircle,
@@ -61,6 +62,7 @@ const PROCESS_LABELS: Record<string, { label: string; description: string }> = {
 export function ROS2BridgePage() {
   const [processes, setProcesses] = useState<ProcessStatus[]>([]);
   const [irlUrl, setIrlUrl] = useState("http://localhost:8020");
+  const [flipRotationForIsaac, setFlipRotationForIsaac] = useState(false);
   const [jointOffsets, setJointOffsets] = useState<Record<string, number>>({
     rotation: 0.0,
     pitch: 0.0,
@@ -215,6 +217,7 @@ export function ROS2BridgePage() {
                 "start_all",
                 {
                   irl_url: irlUrl,
+                  flip_rotation_for_isaac: String(flipRotationForIsaac),
                   ...Object.fromEntries(
                     Object.entries(jointOffsets).map(([k, v]) => [`isaac_${k}_offset_rad`, String(v)])
                   ),
@@ -285,6 +288,37 @@ export function ROS2BridgePage() {
               />
             </div>
           </div>
+          <div className="flex items-center justify-between rounded-lg border p-3 gap-4">
+            <div className="space-y-0.5">
+              <Label htmlFor="flip-rotation-isaac" className="text-base">
+                Flip Rotation for Isaac Sim
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Negate the base joint (Rotation) sent to Isaac when the USD joint axis is opposite the real robot. Applies to HTTP teleop → <code className="text-xs">/joint_states</code>.
+              </p>
+            </div>
+            <Switch
+              id="flip-rotation-isaac"
+              checked={flipRotationForIsaac}
+              onCheckedChange={(checked) => {
+                setFlipRotationForIsaac(checked);
+                if (teleopRunning) {
+                  fetch(
+                    `/ros2/teleop/flip_rotation_for_isaac?value=${checked}`,
+                    { method: "POST" },
+                  )
+                    .then((r) => r.json())
+                    .then((d) => {
+                      if (d.status === "ok") showMessage(d.message, "success");
+                      else showMessage(d.message || "Failed to set flip", "error");
+                    })
+                    .catch(() =>
+                      showMessage("Failed to update flip_rotation_for_isaac", "error"),
+                    );
+                }
+              }}
+            />
+          </div>
           <div className="space-y-3">
             <Label>Isaac Sim Joint Offsets (rad)</Label>
             <p className="text-xs text-muted-foreground">
@@ -328,6 +362,7 @@ export function ROS2BridgePage() {
                   "start_teleop",
                   {
                     irl_url: irlUrl,
+                    flip_rotation_for_isaac: String(flipRotationForIsaac),
                     ...Object.fromEntries(
                       Object.entries(jointOffsets).map(([k, v]) => [`isaac_${k}_offset_rad`, String(v)])
                     ),
