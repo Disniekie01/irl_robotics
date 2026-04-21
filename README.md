@@ -91,6 +91,14 @@ The launcher will then:
 - open your browser to the dashboard
 - start Isaac Sim (prefers `isaac-sim.selector.sh`, then fallback executables)
 
+Optional: to **not** start Isaac (and thus avoid its ROS2 bridge / GPU use) from the icon, set in `~/.config/irl-robotics-launcher.env`:
+
+```bash
+IRL_LAUNCH_ISAAC_SIM=0
+```
+
+The dashboard **HTTP ROS2 bridge** (teleop + relays) is only started from **Dashboard → ROS2 Bridge**; the desktop launcher does not start it.
+
 If clicking the icon does nothing, check:
 
 ```bash

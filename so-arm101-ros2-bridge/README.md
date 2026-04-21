@@ -113,6 +113,7 @@ ros2 topic info /isaac_joint_command
 
 - **Receives**: `/isaac_joint_command` (JointState messages)
 - **Joint Names**: `Rotation`, `Pitch`, `Elbow`, `Wrist_Pitch`, `Wrist_Roll`, `Jaw`
+- **Rotation vs Isaac**: HTTP teleop **negates Rotation** in published `/joint_states` by default (`flip_rotation_for_isaac`, on in Dashboard) so the sim matches the real arm; turn off if your USD axis matches without it.
 - **Mirrors**: Real robot's joint positions in simulation
 
 ## 🎮 Usage

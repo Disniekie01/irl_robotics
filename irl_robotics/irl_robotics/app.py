@@ -42,6 +42,10 @@ from irl_robotics.endpoints import (
     skillgraph_router,
     update_router,
 )
+from irl_robotics.endpoints.ros2 import (
+    kill_orphan_ros2_bridge_processes,
+    shutdown_ros2_bridge_processes,
+)
 from irl_robotics.hardware import get_sim
 from irl_robotics.models import ServerStatus
 from irl_robotics.posthog import posthog, posthog_pageview
@@ -80,6 +84,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         login_to_hf()
     except Exception as e:
         logger.debug(f"Failed to login to Hugging Face: {e}")
+
+    # Kill ROS2 teleop/relays left from a previous server process (stale PIDs not in our table)
+    kill_orphan_ros2_bridge_processes()
+
     try:
         server_ip = get_local_ip()
         logger.success(
@@ -87,6 +95,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         yield
     finally:
+        try:
+            await shutdown_ros2_bridge_processes()
+        except Exception as e:
+            logger.warning(f"ROS2 bridge shutdown: {e}")
+
         udp_server.stop()
 
         from irl_robotics.endpoints.control import (

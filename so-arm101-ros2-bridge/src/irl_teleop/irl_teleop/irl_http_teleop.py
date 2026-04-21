@@ -6,6 +6,22 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
 import requests
 
+
+def _read_bool_param(node: Node, name: str, default: bool) -> bool:
+    """Reliable bool when params were set from strings."""
+    try:
+        raw = node.get_parameter(name).value
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return bool(int(raw))
+        if isinstance(raw, str):
+            return raw.strip().lower() in ("true", "1", "yes", "on")
+    except Exception:
+        pass
+    return default
+
+
 class IRLHttpTeleop(Node):
     def __init__(self):
         super().__init__('irl_http_teleop')
@@ -18,7 +34,8 @@ class IRLHttpTeleop(Node):
         self.declare_parameter('irl_url', 'http://192.168.1.97:8020')
         self.declare_parameter('poll_rate', 0.02)  # 50 Hz for responsive mirroring
         self.declare_parameter('robot_id', 0)
-        self.declare_parameter('flip_rotation_for_isaac', False)
+        # Negate Rotation in the published JointState (fixes mirrored base yaw vs Isaac USD).
+        self.declare_parameter('flip_rotation_for_isaac', True)
         self.declare_parameter('flip_wrist_pitch_for_isaac', False)
         self.declare_parameter('flip_wrist_roll_for_isaac', True)  # default True: SO-100 URDF has origin rpy="0 -3.14 0" so Isaac axis is inverted vs real robot
 
@@ -74,8 +91,10 @@ class IRLHttpTeleop(Node):
         
         self.get_logger().info(f'IRL Robotics HTTP Teleop started at {1.0/self.poll_rate:.0f} Hz')
         self.get_logger().info(f'API: {self.irl_url} | robot_id: {self.robot_id}')
-        if self.get_parameter('flip_rotation_for_isaac').value:
-            self.get_logger().info('Isaac Sim: Rotation sign flip enabled (negate base joint for USD vs real robot)')
+        if _read_bool_param(self, "flip_rotation_for_isaac", True):
+            self.get_logger().info(
+                'Isaac Sim: negating Rotation in /joint_states (flip_rotation_for_isaac)'
+            )
         if self.flip_wrist_roll:
             self.get_logger().info('Isaac Sim: Wrist_Roll (gripper rotate) sign flipped to match real robot')
         for i, name in enumerate(self.joint_names):
@@ -121,27 +140,30 @@ class IRLHttpTeleop(Node):
                     continue
                 lo, hi = self.joint_limits[i]
                 clamped.append(max(lo, min(hi, angle)))
-            
-            # Optional: flip Rotation (index 0) if Isaac USD joint axis is opposite to /joints/read convention
-            if self.get_parameter('flip_rotation_for_isaac').value and len(clamped) > 0:
-                clamped[0] = -clamped[0]
+
             # Optional: flip Wrist_Pitch (index 3) and/or Wrist_Roll (index 4) for Isaac Sim if axes are inverted
             if self.flip_wrist_pitch and len(clamped) > 3:
                 clamped[3] = -clamped[3]
             if self.flip_wrist_roll and len(clamped) > 4:
                 clamped[4] = -clamped[4]
-            # Apply per-joint offsets and re-clamp to URDF limits
+            # Apply per-joint offsets and re-clamp
             for i in range(min(len(clamped), len(self.joint_offsets))):
                 if self.joint_offsets[i] != 0.0:
                     clamped[i] = clamped[i] + self.joint_offsets[i]
                     lo, hi = self.joint_limits[i]
                     clamped[i] = max(lo, min(hi, clamped[i]))
-            
-            # Publish joint states (same as Humble: SO-100 names)
+
+            # Outgoing JointState: optionally flip only Rotation (index 0) for Isaac.
+            positions = list(clamped)
+            if _read_bool_param(self, "flip_rotation_for_isaac", True) and len(positions) > 0:
+                positions[0] = -positions[0]
+                lo, hi = self.joint_limits[0]
+                positions[0] = max(lo, min(hi, positions[0]))
+
             joint_state = JointState()
             joint_state.header.stamp = self.get_clock().now().to_msg()
             joint_state.name = self.joint_names
-            joint_state.position = clamped
+            joint_state.position = positions
             self.joint_pub.publish(joint_state)
             
             self.poll_count += 1

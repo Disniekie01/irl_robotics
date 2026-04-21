@@ -7,3 +7,5 @@ Use the **same** setup you used with Humble. Jazzy only changes which ROS2 distr
 - **Wiring:** Subscribe Joint State → Articulation Controller → your robot prim.
 
 If it worked on Humble with that configuration, use the same in Isaac when running with Jazzy.
+
+**Rotation:** With HTTP teleop, `flip_rotation_for_isaac` (default **true**) **negates only the Rotation** entry in the published `sensor_msgs/JointState` on `/joint_states` before relays send it to Isaac—i.e. flip the joint state, not the hardware. Toggle in **Dashboard → ROS2 Bridge** if the sim is mirrored. For a permanent fix, adjust the **Rotation** revolute axis in USD.

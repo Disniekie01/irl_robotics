@@ -19,6 +19,12 @@ PYTHON_VERSION="${IRL_PYTHON_VERSION:-3.10}"
 IRL_ROBOTICS_HOME="${IRL_ROBOTICS_HOME:-${HOME}/irl_robotics-data}"
 ISAAC_SIM_ROOT="${ISAAC_SIM_ROOT:-${HOME}/isaacsim}"
 
+# Desktop launcher does not start the dashboard HTTP ROS2 bridge (teleop/relays); use /ros2 in the app.
+# Set IRL_LAUNCH_ISAAC_SIM=0 to skip launching Isaac Sim (avoids NVIDIA ROS2 bridge / extra GPUs).
+LAUNCH_ISAAC_SIM="${IRL_LAUNCH_ISAAC_SIM:-1}"
+# Set IRL_LAUNCH_BROWSER=0 to skip opening the dashboard URL automatically.
+LAUNCH_BROWSER="${IRL_LAUNCH_BROWSER:-1}"
+
 mkdir -p "${IRL_ROBOTICS_HOME}"
 
 notify() {
@@ -53,33 +59,41 @@ if ! open_in_terminal "IRL Robotics Server" "${BACKEND_CMD}"; then
   echo "[IRL Launcher] No GUI terminal found. Server logs: ${HOME}/irl_robotics_server.log"
 fi
 
-echo "[IRL Launcher] Opening dashboard in browser..."
-if command -v xdg-open >/dev/null 2>&1; then
-  nohup bash -lc "sleep 4; xdg-open \"http://127.0.0.1:${PORT}/\"" >/dev/null 2>&1 &
+if [[ "${LAUNCH_BROWSER}" == "1" ]]; then
+  echo "[IRL Launcher] Opening dashboard in browser..."
+  if command -v xdg-open >/dev/null 2>&1; then
+    nohup bash -lc "sleep 4; xdg-open \"http://127.0.0.1:${PORT}/\"" >/dev/null 2>&1 &
+  else
+    echo "[IRL Launcher] xdg-open not found; open http://127.0.0.1:${PORT}/ manually."
+  fi
 else
-  echo "[IRL Launcher] xdg-open not found; open http://127.0.0.1:${PORT}/ manually."
+  echo "[IRL Launcher] Browser launch skipped (IRL_LAUNCH_BROWSER=0)."
 fi
 
-echo "[IRL Launcher] Starting Isaac Sim..."
-ISAAC_EXE=""
-# Prefer selector first so users can choose versions.
-for candidate in "isaac-sim.selector.sh" "isaac-sim.sh" "isaac-sim"; do
-  if [[ -x "${ISAAC_SIM_ROOT}/${candidate}" ]]; then
-    ISAAC_EXE="${ISAAC_SIM_ROOT}/${candidate}"
-    break
-  fi
-done
+if [[ "${LAUNCH_ISAAC_SIM}" == "1" ]]; then
+  echo "[IRL Launcher] Starting Isaac Sim..."
+  ISAAC_EXE=""
+  # Prefer selector first so users can choose versions.
+  for candidate in "isaac-sim.selector.sh" "isaac-sim.sh" "isaac-sim"; do
+    if [[ -x "${ISAAC_SIM_ROOT}/${candidate}" ]]; then
+      ISAAC_EXE="${ISAAC_SIM_ROOT}/${candidate}"
+      break
+    fi
+  done
 
-if [[ -n "${ISAAC_EXE}" ]]; then
-  ISAAC_CMD="cd \"${ISAAC_SIM_ROOT}\" && \"${ISAAC_EXE}\""
-  if ! open_in_terminal "Isaac Sim" "${ISAAC_CMD}"; then
-    nohup bash -lc "${ISAAC_CMD}" >"${HOME}/isaac_sim.log" 2>&1 &
-    echo "[IRL Launcher] No GUI terminal found. Isaac logs: ${HOME}/isaac_sim.log"
+  if [[ -n "${ISAAC_EXE}" ]]; then
+    ISAAC_CMD="cd \"${ISAAC_SIM_ROOT}\" && \"${ISAAC_EXE}\""
+    if ! open_in_terminal "Isaac Sim" "${ISAAC_CMD}"; then
+      nohup bash -lc "${ISAAC_CMD}" >"${HOME}/isaac_sim.log" 2>&1 &
+      echo "[IRL Launcher] No GUI terminal found. Isaac logs: ${HOME}/isaac_sim.log"
+    fi
+  else
+    echo "[IRL Launcher] Isaac executable not found in: ${ISAAC_SIM_ROOT}"
+    echo "[IRL Launcher] Set ISAAC_SIM_ROOT in ${CONFIG_FILE} and rerun."
+    notify "Backend started. Isaac path is missing."
   fi
 else
-  echo "[IRL Launcher] Isaac executable not found in: ${ISAAC_SIM_ROOT}"
-  echo "[IRL Launcher] Set ISAAC_SIM_ROOT in ${CONFIG_FILE} and rerun."
-  notify "Backend started. Isaac path is missing."
+  echo "[IRL Launcher] Isaac Sim launch skipped (IRL_LAUNCH_ISAAC_SIM=0)."
 fi
 
 echo "[IRL Launcher] Done."

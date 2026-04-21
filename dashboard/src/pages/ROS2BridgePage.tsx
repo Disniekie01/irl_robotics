@@ -62,7 +62,7 @@ const PROCESS_LABELS: Record<string, { label: string; description: string }> = {
 export function ROS2BridgePage() {
   const [processes, setProcesses] = useState<ProcessStatus[]>([]);
   const [irlUrl, setIrlUrl] = useState("http://localhost:8020");
-  const [flipRotationForIsaac, setFlipRotationForIsaac] = useState(false);
+  const [flipRotationForIsaac, setFlipRotationForIsaac] = useState(true);
   const [jointOffsets, setJointOffsets] = useState<Record<string, number>>({
     rotation: 0.0,
     pitch: 0.0,
@@ -90,6 +90,10 @@ export function ROS2BridgePage() {
       if (res.ok) {
         const data = await res.json();
         setProcesses(data.processes);
+        // When teleop is running, mirror live ROS param so the switch matches reality (default on server is true).
+        if (typeof data.flip_rotation_for_isaac === "boolean") {
+          setFlipRotationForIsaac(data.flip_rotation_for_isaac);
+        }
       }
     } catch {
       // Server may not be available yet
@@ -291,10 +295,10 @@ export function ROS2BridgePage() {
           <div className="flex items-center justify-between rounded-lg border p-3 gap-4">
             <div className="space-y-0.5">
               <Label htmlFor="flip-rotation-isaac" className="text-base">
-                Flip Rotation for Isaac Sim
+                Negate Rotation in <code className="text-xs">/joint_states</code>
               </Label>
               <p className="text-xs text-muted-foreground">
-                Negate the base joint (Rotation) sent to Isaac when the USD joint axis is opposite the real robot. Applies to HTTP teleop → <code className="text-xs">/joint_states</code>.
+                Flips only the Rotation value in the JointState published to Isaac (HTTP teleop). Turn off if the sim already matches the arm.
               </p>
             </div>
             <Switch

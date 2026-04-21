@@ -24,6 +24,14 @@ ISAAC_SIM_ROOT="$HOME/isaacsim"
 # IRL_PORT=8020
 # IRL_PYTHON_VERSION=3.10
 # IRL_ROBOTICS_HOME="$HOME/irl_robotics-data"
+
+# Desktop icon: starts the IRL server + (by default) browser + Isaac Sim.
+# The dashboard HTTP ROS2 bridge (teleop + relays) is never started by this launcher; use
+# Dashboard → ROS2 Bridge when you need it.
+# Set to 0 to only run the backend (no Isaac / no NVIDIA ROS2 bridge from the launcher):
+# IRL_LAUNCH_ISAAC_SIM=0
+# Set to 0 to skip opening the browser:
+# IRL_LAUNCH_BROWSER=0
 EOF
   echo "Created config: ${CONFIG_FILE}"
 fi

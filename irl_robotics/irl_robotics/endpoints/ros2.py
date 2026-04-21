@@ -6,6 +6,7 @@ Start/stop ROS2 teleop nodes and topic relays from the dashboard.
 import asyncio
 import os
 import signal
+import subprocess
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter
@@ -89,6 +90,8 @@ class ROS2ProcessStatus(BaseModel):
 
 class ROS2StatusResponse(BaseModel):
     processes: List[ROS2ProcessStatus]
+    # Present when HTTP teleop is running: live ROS param (dashboard sync)
+    flip_rotation_for_isaac: Optional[bool] = None
 
 
 class ROS2ActionResponse(BaseModel):
@@ -156,6 +159,93 @@ async def _check_process_early_exit(name: str, proc: asyncio.subprocess.Process,
         )
 
 
+# Substrings that match our relay `ros2 run topic_tools relay 'src' 'dst'` (quoted args in shell).
+_RELAY_PKILL_QUOTED_PATTERNS = (
+    "relay '/joint_states' '/isaac_joint_command'",
+    "relay '/joint_states' '/joint_command'",
+    "relay '/robot/cmd_pose' '/isaac_pose_command'",
+    "relay '/robot/cmd_vel' '/isaac_vel_command'",
+    "relay '/robot/gripper' '/isaac_gripper_command'",
+)
+# Unquoted form (some ros2 wrappers invoke relay without the same quoting in ps).
+_RELAY_PKILL_UNQUOTED_SNIPPETS = (
+    "relay /joint_states /isaac_joint_command",
+    "relay /joint_states /joint_command",
+    "relay /robot/cmd_pose /isaac_pose_command",
+    "relay /robot/cmd_vel /isaac_vel_command",
+    "relay /robot/gripper /isaac_gripper_command",
+)
+# Actual relay executable (survives as orphan if parent shell dies); distro-agnostic path chunk.
+_RELAY_BINARY_PKILL = "lib/topic_tools/relay"
+
+# HTTP teleop: both `ros2 run ...` and `python .../irl_http_teleop` invocations.
+_TELEOP_PKILL_PATTERNS = (
+    "ros2 run irl_teleop irl_http_teleop",
+    "irl_teleop/lib/irl_teleop/irl_http_teleop",
+)
+
+
+def _pkill_patterns(patterns: tuple[str, ...], *, use_sigkill: bool) -> int:
+    """Return number of patterns that matched at least one process (pkill exit 0)."""
+    flag = "-9" if use_sigkill else None
+    matched = 0
+    for pat in patterns:
+        try:
+            args = ["pkill", "-f", pat]
+            if flag:
+                args.insert(1, flag)
+            r = subprocess.run(args, capture_output=True, timeout=10, text=True)
+            if r.returncode == 0:
+                matched += 1
+                logger.info(f"ROS2 pkill matched: {pat!r}")
+        except FileNotFoundError:
+            logger.warning("pkill not found; cannot force-stop ROS2 bridge processes")
+            return matched
+        except Exception as e:
+            logger.debug(f"ROS2 pkill {pat!r}: {e}")
+    return matched
+
+
+def force_stop_ros2_bridge_processes(
+    *,
+    teleop: bool = True,
+    relays: bool = True,
+    use_sigkill: bool = True,
+) -> None:
+    """Best-effort SIGKILL of bridge-related processes (complements tracked subprocess killpg).
+
+    Call after _stop_process so any untracked children (topic_tools relay binary, bash wait loops)
+    are removed. Does not raise."""
+    patterns: List[str] = []
+    if teleop:
+        patterns.extend(_TELEOP_PKILL_PATTERNS)
+    if relays:
+        patterns.extend(_RELAY_PKILL_QUOTED_PATTERNS)
+        patterns.extend(_RELAY_PKILL_UNQUOTED_SNIPPETS)
+        patterns.append(_RELAY_BINARY_PKILL)
+    if not patterns:
+        return
+    _pkill_patterns(tuple(patterns), use_sigkill=use_sigkill)
+
+
+async def shutdown_ros2_bridge_processes() -> None:
+    """Stop all ROS2 bridge subprocesses started by this server (teleop + relays)."""
+    for name in list(_ros2_processes.keys()):
+        await _stop_process(name)
+    await asyncio.to_thread(force_stop_ros2_bridge_processes, teleop=True, relays=True)
+
+
+def kill_orphan_ros2_bridge_processes() -> None:
+    """Best-effort: kill ROS2 bridge processes from a previous server instance.
+
+    Uses the same patterns as force_stop (SIGTERM first is softer; then SIGKILL for leftovers).
+    """
+    all_patterns = _TELEOP_PKILL_PATTERNS + _RELAY_PKILL_QUOTED_PATTERNS + _RELAY_PKILL_UNQUOTED_SNIPPETS + (_RELAY_BINARY_PKILL,)
+    _pkill_patterns(all_patterns, use_sigkill=False)
+    _pkill_patterns(all_patterns, use_sigkill=True)
+    logger.debug("ROS2 bridge startup orphan cleanup finished")
+
+
 async def _stop_process(name: str) -> bool:
     """Stop a ROS2 process."""
     global _ros2_processes
@@ -170,17 +260,29 @@ async def _stop_process(name: str) -> bool:
         return True
 
     try:
-        # Kill the whole process group
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        # Kill the whole process group (shell + ros2 children in same session)
+        try:
+            pgid = os.getpgid(proc.pid)
+        except ProcessLookupError:
+            del _ros2_processes[name]
+            logger.info(f"ROS2 process '{name}' already exited")
+            return True
+        os.killpg(pgid, signal.SIGTERM)
         try:
             await asyncio.wait_for(proc.wait(), timeout=5.0)
         except asyncio.TimeoutError:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await asyncio.wait_for(proc.wait(), timeout=3.0)
         del _ros2_processes[name]
         logger.info(f"ROS2 process '{name}' stopped")
         return True
     except Exception as e:
         logger.error(f"Failed to stop ROS2 process '{name}': {e}")
+        if name in _ros2_processes:
+            del _ros2_processes[name]
         return False
 
 
@@ -188,6 +290,35 @@ def _is_running(name: str) -> bool:
     if name not in _ros2_processes:
         return False
     return _ros2_processes[name].returncode is None
+
+
+def _read_flip_rotation_param_sync() -> Optional[bool]:
+    """Read flip_rotation_for_isaac from the running irl_http_teleop node, if any."""
+    cmd = _SOURCE_CMD + "ros2 param get /irl_http_teleop flip_rotation_for_isaac 2>/dev/null"
+    try:
+        proc = subprocess.run(
+            cmd,
+            shell=True,
+            executable="/bin/bash",
+            capture_output=True,
+            text=True,
+            timeout=4.0,
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    for line in out.splitlines():
+        low = line.lower()
+        if "boolean" not in low and "bool" not in low:
+            continue
+        if ":" not in line:
+            continue
+        val = line.split(":", 1)[1].strip().lower()
+        if val == "true":
+            return True
+        if val == "false":
+            return False
+    return None
 
 
 # ─── Endpoints ───────────────────────────────────────────────
@@ -213,7 +344,12 @@ async def ros2_status() -> ROS2StatusResponse:
             else None
         )
         statuses.append(ROS2ProcessStatus(name=name, running=running, pid=pid))
-    return ROS2StatusResponse(processes=statuses)
+    flip: Optional[bool] = None
+    if _is_running("http_teleop"):
+        ready, _ = _teleop_workspace_ready()
+        if ready:
+            flip = await asyncio.to_thread(_read_flip_rotation_param_sync)
+    return ROS2StatusResponse(processes=statuses, flip_rotation_for_isaac=flip)
 
 
 def _teleop_workspace_ready() -> tuple[bool, str]:
@@ -230,7 +366,7 @@ def _teleop_workspace_ready() -> tuple[bool, str]:
 @router.post("/start/teleop", response_model=ROS2ActionResponse)
 async def start_teleop(
     irl_url: str = "http://localhost:8020",
-    flip_rotation_for_isaac: bool = False,
+    flip_rotation_for_isaac: bool = True,
     isaac_rotation_offset_rad: float = 0.0,
     isaac_pitch_offset_rad: float = 0.0,
     isaac_elbow_offset_rad: float = 0.0,
@@ -266,6 +402,7 @@ async def start_teleop(
 async def stop_teleop() -> ROS2ActionResponse:
     """Stop the ROS2 HTTP teleop node."""
     await _stop_process("http_teleop")
+    await asyncio.to_thread(force_stop_ros2_bridge_processes, teleop=True, relays=False)
     return ROS2ActionResponse(status="ok", message="HTTP teleop node stopped")
 
 
@@ -286,8 +423,8 @@ async def set_teleop_wrist_roll_offset(value: float) -> ROS2ActionResponse:
 
 
 @router.post("/teleop/flip_rotation_for_isaac", response_model=ROS2ActionResponse)
-async def set_flip_rotation_for_isaac(value: bool = False) -> ROS2ActionResponse:
-    """Set flip_rotation_for_isaac on the running HTTP teleop node (negate base joint for Isaac USD vs real robot)."""
+async def set_flip_rotation_for_isaac(value: bool = True) -> ROS2ActionResponse:
+    """Set flip_rotation_for_isaac on the running HTTP teleop node (negate Rotation in /joint_states; default on)."""
     val = "true" if value else "false"
     cmd = _SOURCE_CMD + f"ros2 param set /irl_http_teleop flip_rotation_for_isaac {val}"
     try:
@@ -374,6 +511,7 @@ async def stop_relays() -> ROS2ActionResponse:
     """Stop all Isaac Sim topic relays."""
     for name in ["relay_joints", "relay_joints_cmd", "relay_pose", "relay_vel", "relay_gripper"]:
         await _stop_process(name)
+    await asyncio.to_thread(force_stop_ros2_bridge_processes, teleop=False, relays=True)
     return ROS2ActionResponse(status="ok", message="All topic relays stopped")
 
 
@@ -383,7 +521,7 @@ _RELAYS_START_DELAY_SEC = 5.0  # Let teleop advertise topics before relays (Jazz
 @router.post("/start/all", response_model=ROS2ActionResponse)
 async def start_all(
     irl_url: str = "http://localhost:8020",
-    flip_rotation_for_isaac: bool = False,
+    flip_rotation_for_isaac: bool = True,
     isaac_rotation_offset_rad: float = 0.0,
     isaac_pitch_offset_rad: float = 0.0,
     isaac_elbow_offset_rad: float = 0.0,
@@ -414,4 +552,5 @@ async def stop_all() -> ROS2ActionResponse:
     """Stop all ROS2 bridge processes."""
     for name in list(_ros2_processes.keys()):
         await _stop_process(name)
+    await asyncio.to_thread(force_stop_ros2_bridge_processes, teleop=True, relays=True)
     return ROS2ActionResponse(status="ok", message="All ROS2 processes stopped")

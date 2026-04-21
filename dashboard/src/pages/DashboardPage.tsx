@@ -567,7 +567,11 @@ function ROS2LaunchWidget() {
     } catch { /* network error */ }
   }, []);
 
-  useState(() => { fetchStatus(); const id = setInterval(fetchStatus, 3000); return () => clearInterval(id); });
+  useEffect(() => {
+    fetchStatus();
+    const id = setInterval(fetchStatus, 3000);
+    return () => clearInterval(id);
+  }, [fetchStatus]);
 
   const anyRunning = processes.some((p) => p.running);
   const runCount = processes.filter((p) => p.running).length;
