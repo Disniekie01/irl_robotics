@@ -345,11 +345,32 @@ export function DemoPage() {
       </Alert>
 
       {demoStatus?.leader_follower_active && (
-        <div className="sticky top-3 z-20 flex justify-end">
-          <Button variant="destructive" onClick={stopDemo} disabled={busy !== null}>
-            {busy === "stop" && <Loader2 className="mr-2 size-4 animate-spin" />}
-            <Square className="mr-2 size-4" />
-            Emergency stop demo
+        <div className="fixed bottom-6 right-6 z-50 w-[min(360px,calc(100vw-3rem))] rounded-2xl border-2 border-red-500 bg-red-950/95 p-4 shadow-2xl shadow-red-950/60 ring-4 ring-red-500/25">
+          <div className="mb-3 flex items-start gap-3">
+            <div className="mt-0.5 rounded-full bg-red-500 p-2 text-white shadow-lg">
+              <AlertCircle className="size-5" />
+            </div>
+            <div>
+              <div className="text-lg font-black uppercase tracking-wide text-white">
+                Emergency Stop
+              </div>
+              <p className="text-xs text-red-100">
+                Demo is running. Stop leader-follower immediately.
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="destructive"
+            onClick={stopDemo}
+            disabled={busy !== null}
+            className="h-14 w-full border border-red-300 bg-red-600 text-base font-black uppercase tracking-wide text-white shadow-lg hover:bg-red-700"
+          >
+            {busy === "stop" ? (
+              <Loader2 className="mr-2 size-5 animate-spin" />
+            ) : (
+              <Square className="mr-2 size-5" />
+            )}
+            Stop Demo Now
           </Button>
         </div>
       )}
