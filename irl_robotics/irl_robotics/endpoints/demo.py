@@ -244,7 +244,9 @@ async def _pick_leader_id(
 
     for idx, robot in enumerate(robots):
         if _is_local_so100(robot):
-            serial = getattr(robot, "SERIAL_ID", robot.device_name)
+            serial = getattr(robot, "SERIAL_ID", None) or getattr(
+                robot, "device_name", f"robot_{idx}"
+            )
             return idx, serial, f"Auto-selected local leader {serial}"
 
     return None, None, "No local SO-100 leader arm connected to this server"

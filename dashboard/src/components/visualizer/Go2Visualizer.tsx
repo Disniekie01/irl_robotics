@@ -28,8 +28,11 @@ function Go2Model({ joints }: { joints: Record<string, number> }) {
     };
     loader.loadMeshCb = (path, manager, onComplete) => {
       const colladaLoader = new ColladaLoader(manager);
+      const marker = "/urdf/go2_description/";
+      const markerIndex = path.lastIndexOf(marker);
+      const meshPath = markerIndex >= 0 ? path.slice(markerIndex) : path;
       colladaLoader.load(
-        path,
+        meshPath,
         (collada) => {
           onComplete(collada?.scene ?? new THREE.Group());
         },
