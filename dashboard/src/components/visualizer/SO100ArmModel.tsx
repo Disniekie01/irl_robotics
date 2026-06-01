@@ -88,11 +88,18 @@ export function SO100ArmModel({ jointAngles }: { jointAngles: number[] }) {
   );
 }
 
-/** Mount SO-100 on Go2 back (tune offsets after visual check). */
+/**
+ * Mount SO-100 on Go2 back.
+ * Tune here: rotation is [X, Y, Z] in radians (Three.js Euler order).
+ * - X: tilt forward/back
+ * - Y: spin on the dog's back (yaw)
+ * - Z: roll sideways
+ */
 export function SO100OnGo2Mount({
   jointAngles,
-  position = [0, 0.5, 0.03],
-  rotation = [Math.PI / 2, 0, Math.PI / 2],
+  position = [0, 0.46, 0.02],
+  // Upright on back, rotated another 90 degrees around the dog-back yaw axis.
+  rotation = [Math.PI / 2, Math.PI, 0],
   scale = 1,
 }: {
   jointAngles: number[];
