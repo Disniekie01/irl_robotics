@@ -97,9 +97,9 @@ export function SO100ArmModel({ jointAngles }: { jointAngles: number[] }) {
  */
 export function SO100OnGo2Mount({
   jointAngles,
-  position = [0, 0.46, 0.02],
-  // Upright on back, rotated another 90 degrees around the dog-back yaw axis.
-  rotation = [Math.PI / 2, Math.PI, 0],
+  position = [0.03, 0.5, 0.02],
+  // Physical mount: vertical base on the Go2 back, arm yawed forward over the head.
+  rotation = [Math.PI / 2, Math.PI, -Math.PI / 2],
   scale = 1,
 }: {
   jointAngles: number[];
