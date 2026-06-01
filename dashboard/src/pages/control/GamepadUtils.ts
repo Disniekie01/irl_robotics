@@ -63,7 +63,7 @@ export interface GamepadInfo {
 }
 
 export type ControlType = "analog-vertical" | "analog-horizontal" | "digital" | "trigger";
-export type ConfigMode = "individual" | "multi-arm";
+export type ConfigMode = "individual" | "multi-arm" | "mobile";
 
 export interface Control {
   key: string;
@@ -139,6 +139,17 @@ export const robotIDFromName = (name?: string | null, serverStatus?: ServerStatu
     (robot) => robot.device_name === name,
   );
   return index === -1 ? 0 : index;
+};
+
+export const isMobileRobot = (
+  name?: string | null,
+  serverStatus?: ServerStatus,
+): boolean => {
+  if (!name || !serverStatus?.robot_status) return false;
+  return (
+    serverStatus.robot_status.find((robot) => robot.device_name === name)
+      ?.robot_type === "mobile"
+  );
 };
 
 export const postData = async (
@@ -246,7 +257,7 @@ export const getControlName = (index: number): string => {
 };
 
 export const getRobotsToControl = (config: ControllerArmPair | MultiArmGroup, configMode: ConfigMode): string[] => {
-  if (configMode === "individual") {
+  if (configMode === "individual" || configMode === "mobile") {
     return [(config as ControllerArmPair).robot_name ?? ""];
   } else {
     const group = config as MultiArmGroup;
@@ -257,6 +268,29 @@ export const getRobotsToControl = (config: ControllerArmPair | MultiArmGroup, co
     }
   }
 };
+
+// Mobile robots use planar velocity-style commands: forward/back, strafe, yaw.
+export const toMobileMovementData = (
+  data: {
+    x: number;
+    y: number;
+    z: number;
+    rx: number;
+    ry: number;
+    rz: number;
+    open: number;
+  },
+) => ({
+  // In gamepad mode, processAnalogSticks maps left-stick Y to z for arms.
+  // For mobile robots, reinterpret that same left-stick Y as forward/back.
+  x: data.z,
+  y: data.y,
+  z: 0,
+  rx: 0,
+  ry: 0,
+  rz: data.rz,
+  open: data.open,
+});
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const applyControlMode = (data: any, controlMode: string): any => {
@@ -271,6 +305,10 @@ export const applyControlMode = (data: any, controlMode: string): any => {
 };
 
 export const initRobot = async (robotName: string, serverStatus?: ServerStatus) => {
+  if (isMobileRobot(robotName, serverStatus)) {
+    return;
+  }
+
   try {
     await postData(
       BASE_URL + "move/init",
@@ -337,7 +375,8 @@ export const getAvailableControllers = (
 export const getAvailableRobots = (
   currentPairIndex: number, 
   controllerArmPairs: ControllerArmPair[], 
-  serverStatus?: ServerStatus
+  serverStatus?: ServerStatus,
+  robotType?: "manipulator" | "mobile" | "other",
 ) => {
   const usedRobotNames = new Set<string>();
 
@@ -348,7 +387,10 @@ export const getAvailableRobots = (
   });
 
   return serverStatus?.robot_status?.filter(
-    (robot) => robot.device_name && !usedRobotNames.has(robot.device_name)
+    (robot) =>
+      robot.device_name &&
+      !usedRobotNames.has(robot.device_name) &&
+      (!robotType || robot.robot_type === robotType)
   ) || [];
 };
 

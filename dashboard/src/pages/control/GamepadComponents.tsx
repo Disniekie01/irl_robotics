@@ -27,6 +27,8 @@ import {
   postData,
   robotIDFromName,
   extractAnalogValues,
+  isMobileRobot,
+  toMobileMovementData,
 } from './GamepadUtils';
 
 // ==================== CUSTOM HOOKS ====================
@@ -55,7 +57,7 @@ export function useGamepadDetection(
                                       multiArmGroups.some(group => group.controller_index !== null);
       
       if (available.length > 0 && !hasAnyControllerAssigned && !hasUserMadeSelection) {
-        if (configMode === "individual") {
+        if (configMode === "individual" || configMode === "mobile") {
           setControllerArmPairs(prev => {
             const newPairs = [...prev];
             newPairs[0] = {
@@ -82,7 +84,7 @@ export function useGamepadDetection(
       
       // Handle complete disconnection
       if (available.length === 0 && hasAnyControllerAssigned) {
-        if (configMode === "individual") {
+        if (configMode === "individual" || configMode === "mobile") {
           setControllerArmPairs(prev => 
             prev.map(pair => ({
               ...pair,
@@ -148,7 +150,7 @@ export function useGamepadControl(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let activeConfigs: any[] = [];
     
-    if (configMode === "individual") {
+    if (configMode === "individual" || configMode === "mobile") {
       activeConfigs = controllerArmPairs.filter(
         pair => pair.controller_index !== null && pair.robot_name !== null
       );
@@ -167,7 +169,10 @@ export function useGamepadControl(
         const gamepad = gamepads[config.controller_index!];
         if (!gamepad) return;
 
-        const configKey = configMode === "individual" ? `individual-${configIndex}` : `group-${config.id}`;
+        const configKey =
+          configMode === "individual" || configMode === "mobile"
+            ? `individual-${configIndex}`
+            : `group-${config.id}`;
         
         // Get or create control state
         if (!controlStates.current.has(configKey)) {
@@ -363,6 +368,10 @@ export function useGamepadControl(
                 finalData = applyControlMode(data, config.control_mode);
               }
               
+              if (configMode === "mobile" || isMobileRobot(robotName, serverStatus)) {
+                finalData = toMobileMovementData(finalData);
+              }
+
               postData(BASE_URL + "move/relative", finalData, {
                 robot_id: robotIDFromName(robotName, serverStatus),
               });

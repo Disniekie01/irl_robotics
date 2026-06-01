@@ -24,7 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import {
   Tooltip,
   TooltipContent,
@@ -71,6 +70,7 @@ import {
   getAvailableRobots,
   getAvailableRobotsForGroup,
   initRobot,
+  isMobileRobot,
   robotIDFromName,
 } from "./GamepadUtils";
 
@@ -144,13 +144,20 @@ export function GamepadControl() {
       serverStatus?.robot_status &&
       serverStatus.robot_status.length > 0 &&
       serverStatus.robot_status[0].device_name &&
-      configMode === "individual"
+      (configMode === "individual" || configMode === "mobile")
     ) {
+      const matchingRobots = serverStatus.robot_status.filter(
+        (robot) =>
+          robot.device_name &&
+          (configMode !== "mobile" || robot.robot_type === "mobile"),
+      );
+      if (matchingRobots.length === 0) return;
+
       setControllerArmPairs((prev) => {
         const newPairs = [...prev];
         newPairs[0] = {
           ...newPairs[0],
-          robot_name: serverStatus.robot_status[0].device_name || null,
+          robot_name: matchingRobots[0].device_name || null,
         };
         return newPairs;
       });
@@ -192,7 +199,7 @@ export function GamepadControl() {
   const startMoving = async () => {
     let robotsToInit: string[] = [];
 
-    if (configMode === "individual") {
+    if (configMode === "individual" || configMode === "mobile") {
       const validPairs = controllerArmPairs.filter(
         (pair) => pair.controller_index !== null && pair.robot_name !== null,
       );
@@ -207,7 +214,9 @@ export function GamepadControl() {
 
     // Initialize all robots
     for (const robotName of robotsToInit) {
-      await initRobot(robotName, serverStatus);
+      if (!isMobileRobot(robotName, serverStatus)) {
+        await initRobot(robotName, serverStatus);
+      }
     }
 
     setIsMoving(true);
@@ -312,7 +321,10 @@ export function GamepadControl() {
     );
     const availableRobots =
       serverStatus?.robot_status?.filter(
-        (robot) => robot.device_name && !usedRobotNames.has(robot.device_name),
+        (robot) =>
+          robot.device_name &&
+          !usedRobotNames.has(robot.device_name) &&
+          (configMode !== "mobile" || robot.robot_type === "mobile"),
       ) || [];
 
     if (availableControllers.length >= 1 && availableRobots.length >= 1) {
@@ -392,7 +404,7 @@ export function GamepadControl() {
 
   // Check if configuration is valid
   const isConfigValid = () => {
-    if (configMode === "individual") {
+    if (configMode === "individual" || configMode === "mobile") {
       return controllerArmPairs.every(
         (pair) => pair.controller_index !== null && pair.robot_name !== null,
       );
@@ -542,32 +554,49 @@ export function GamepadControl() {
         <CardHeader className="flex flex-col gap-y-2">
           <div className="flex items-center justify-between">
             <CardDescription>
-              Control robot arms with game controllers - individual or multi-arm
-              modes
+              Control robot arms or mobile robots with game controllers
             </CardDescription>
             <div className="flex items-center space-x-4">
               <Label htmlFor="config-mode">Control Mode:</Label>
-              <div className="flex items-center space-x-2">
-                <Target className="h-4 w-4" />
-                <Switch
-                  id="config-mode"
-                  checked={configMode === "multi-arm"}
-                  onCheckedChange={(checked) =>
-                    switchConfigMode(checked ? "multi-arm" : "individual")
-                  }
-                  disabled={isMoving}
-                />
-                <Users className="h-4 w-4" />
-              </div>
+              <Select
+                value={configMode}
+                onValueChange={(value) => switchConfigMode(value as ConfigMode)}
+                disabled={isMoving}
+              >
+                <SelectTrigger id="config-mode" className="w-[190px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="individual">
+                    Individual Arm Control
+                  </SelectItem>
+                  <SelectItem value="mobile">Mobile / Go2 Control</SelectItem>
+                  <SelectItem value="multi-arm">Multi-Arm Control</SelectItem>
+                </SelectContent>
+              </Select>
               <Badge
                 variant={configMode === "individual" ? "secondary" : "default"}
               >
                 {configMode === "individual"
                   ? "Individual Control"
-                  : "Multi-Arm Control"}
+                  : configMode === "mobile"
+                    ? "Mobile / Go2 Control"
+                    : "Multi-Arm Control"}
               </Badge>
             </div>
           </div>
+
+          {configMode === "mobile" && (
+            <Alert>
+              <Gamepad2 className="h-4 w-4" />
+              <AlertTitle>Mobile / Go2 gamepad mapping</AlertTitle>
+              <AlertDescription>
+                Left stick controls forward/back and yaw like keyboard arrows.
+                Right stick X controls strafe. Wrist, vertical, and gripper
+                commands are ignored.
+              </AlertDescription>
+            </Alert>
+          )}
 
           <Accordion type="single" collapsible>
             <AccordionItem value="item-1">
@@ -777,10 +806,14 @@ export function GamepadControl() {
           )}
 
           {/* Configuration Section */}
-          {configMode === "individual" ? (
+          {configMode === "individual" || configMode === "mobile" ? (
             <div>
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-medium">Robot-Controller Pairs</h3>
+                <h3 className="text-lg font-medium">
+                  {configMode === "mobile"
+                    ? "Mobile Robot-Controller Pairs"
+                    : "Robot-Controller Pairs"}
+                </h3>
                 <div className="flex gap-2">
                   <TooltipProvider>
                     <Tooltip>
@@ -841,7 +874,9 @@ export function GamepadControl() {
 
                   <div className="flex flex-col md:flex-row items-center gap-4">
                     <div className="space-y-2 w-full">
-                      <Label htmlFor={`robot-arm-${index}`}>Robot Arm</Label>
+                      <Label htmlFor={`robot-arm-${index}`}>
+                        {configMode === "mobile" ? "Mobile Robot" : "Robot Arm"}
+                      </Label>
                       <Select
                         value={pair.robot_name || ""}
                         onValueChange={(value) => {
@@ -857,6 +892,7 @@ export function GamepadControl() {
                             index,
                             controllerArmPairs,
                             serverStatus,
+                            configMode === "mobile" ? "mobile" : undefined,
                           ).map((robot, key) => (
                             <SelectItem
                               key={`select-robot-${index}-${key}`}
@@ -1258,6 +1294,28 @@ export function GamepadControl() {
             </ul>
           </div>
 
+          {configMode === "mobile" && (
+            <div className="mb-6 p-4 bg-green-50 dark:bg-green-950 rounded-lg">
+              <h4 className="font-medium mb-2 flex items-center gap-2">
+                <Gamepad2 className="h-4 w-4" />
+                Mobile / Go2 Mode
+              </h4>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <div>
+                  • <span className="font-medium">Left Stick Y</span>:
+                  forward/back
+                </div>
+                <div>
+                  • <span className="font-medium">Right Stick X</span>: strafe
+                  left/right
+                </div>
+                <div>
+                  • <span className="font-medium">Left Stick X</span>: turn/yaw
+                </div>
+              </div>
+            </div>
+          )}
+
           {configMode === "multi-arm" && (
             <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
               <h4 className="font-medium mb-2 flex items-center gap-2">
@@ -1392,7 +1450,7 @@ export function GamepadControl() {
           </CardHeader>
           <CardContent>
             <Accordion type="multiple" className="w-full">
-              {configMode === "individual"
+              {configMode === "individual" || configMode === "mobile"
                 ? controllerArmPairs
                     .filter(
                       (pair) =>

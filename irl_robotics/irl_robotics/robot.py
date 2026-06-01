@@ -1,7 +1,8 @@
+import importlib
 import time
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, List, Set
+from typing import Any, Dict, List, Set, Type
 
 from async_property import async_property
 from fastapi import HTTPException
@@ -13,14 +14,9 @@ from irl_robotics.configs import config
 from irl_robotics.hardware import (
     BaseRobot,
     KochHardware,
-    LeKiwi,
-    PiperHardware,
     RemoteRobot,
     SO100Hardware,
-    UnitreeD1Arm,
-    UnitreeGo2,
     URDFLoader,
-    WX250SHardware,
     get_sim,
 )
 from irl_robotics.models import RobotConfigStatus
@@ -28,17 +24,57 @@ from irl_robotics.utils import is_can_plugged
 
 rcm = None
 
-robot_name_to_class = {
-    SO100Hardware.name: SO100Hardware,
-    KochHardware.name: KochHardware,
-    WX250SHardware.name: WX250SHardware,
-    UnitreeD1Arm.name: UnitreeD1Arm,
-    UnitreeGo2.name: UnitreeGo2,
-    LeKiwi.name: LeKiwi,
-    PiperHardware.name: PiperHardware,
-    RemoteRobot.name: RemoteRobot,
-    URDFLoader.name: URDFLoader,
-}
+_OPTIONAL_ROBOT_MODULES = (
+    "irl_robotics.hardware.wx250s",
+    "irl_robotics.hardware.d1_arm",
+    "irl_robotics.hardware.go2",
+    "irl_robotics.hardware.lekiwi",
+    "irl_robotics.hardware.piper",
+)
+
+
+def _build_robot_name_to_class() -> Dict[str, Type[BaseRobot]]:
+    mapping: Dict[str, Type[BaseRobot]] = {
+        SO100Hardware.name: SO100Hardware,
+        KochHardware.name: KochHardware,
+        RemoteRobot.name: RemoteRobot,
+        URDFLoader.name: URDFLoader,
+    }
+    for module_name in _OPTIONAL_ROBOT_MODULES:
+        try:
+            mod = importlib.import_module(module_name)
+        except ImportError as exc:
+            logger.debug(f"Optional robot module unavailable: {module_name} ({exc})")
+            continue
+        for attr in dir(mod):
+            obj = getattr(mod, attr)
+            if (
+                isinstance(obj, type)
+                and issubclass(obj, BaseRobot)
+                and obj is not BaseRobot
+                and getattr(obj, "name", None)
+            ):
+                mapping[obj.name] = obj
+    return mapping
+
+
+robot_name_to_class = _build_robot_name_to_class()
+
+
+def _port_scan_robot_classes() -> list[type[BaseRobot]]:
+    """USB port probe order; skip classes whose optional deps are missing."""
+    classes: list[type[BaseRobot]] = []
+    for module_name, class_name in (
+        ("irl_robotics.hardware.wx250s", "WX250SHardware"),
+        ("irl_robotics.hardware.koch11", "KochHardware"),
+        ("irl_robotics.hardware.so100", "SO100Hardware"),
+    ):
+        try:
+            mod = importlib.import_module(module_name)
+            classes.append(getattr(mod, class_name))
+        except ImportError as exc:
+            logger.debug(f"Skipping {class_name} during port scan: {exc}")
+    return classes
 
 
 @dataclass
@@ -169,11 +205,7 @@ class RobotConnectionManager:
                 logger.debug(f"Skipping {port.device}: already connected (or alias).")
                 continue
 
-            for robot_class in [
-                WX250SHardware,
-                KochHardware,
-                SO100Hardware,
-            ]:
+            for robot_class in _port_scan_robot_classes():
                 if not hasattr(robot_class, "name") or not hasattr(
                     robot_class, "from_port"
                 ):
@@ -202,7 +234,14 @@ class RobotConnectionManager:
 
         # Detect CAN-based Agilex Piper robots
         if config.ENABLE_CAN:
+            try:
+                from irl_robotics.hardware.piper import PiperHardware
+            except ImportError as exc:
+                logger.debug(f"Piper CAN scan skipped: {exc}")
+                PiperHardware = None  # type: ignore[misc, assignment]
             for can_name in self.available_can_ports:
+                if PiperHardware is None:
+                    break
                 logger.info(f"Attempting to connect to Agilex Piper on {can_name}")
                 try:
                     robot = PiperHardware.from_can_port(can_name=can_name)

@@ -25,6 +25,7 @@ from supabase_auth.types import Session as SupabaseSession
 from irl_robotics.ai_control import CustomAIControlSignal, setup_ai_control
 from irl_robotics.camera import AllCameras, get_all_cameras
 from irl_robotics.control_signal import ControlSignal
+from irl_robotics.endpoints.macro import record_mobile_command
 from irl_robotics.hardware.base import BaseManipulator
 from irl_robotics.leader_follower import RobotPair, start_leader_follower_loop
 from irl_robotics.models import (
@@ -436,6 +437,13 @@ async def move_relative(
             target_position=np.array([data.x, data.y, data.z]),
             target_orientation_rad=target_orientation_rad,
         )
+        if getattr(robot.status(), "robot_type", "manipulator") == "mobile":
+            record_mobile_command(
+                robot_id=robot_id,
+                x=data.x,
+                y=data.y,
+                rz=target_orientation_rad[2],
+            )
         if hasattr(robot, "control_gripper") and data.open is not None:
             # If the robot has a control_gripper method, use it to open/close the gripper
             robot.control_gripper(open_command=data.open)

@@ -31,6 +31,7 @@ interface MacroInfo {
   frame_count: number;
   joint_count: number;
   created_at: number;
+  type?: "joint" | "mobile";
 }
 
 interface MacroListResponse {
@@ -41,6 +42,7 @@ interface MacroStatus {
   recording: boolean;
   playing: boolean;
   recorded_frames: number;
+  recording_type?: "joint" | "mobile" | null;
 }
 
 export function MacrosControl() {
@@ -69,6 +71,21 @@ export function MacrosControl() {
   const isRecording = macroStatus?.recording ?? false;
   const isPlaying = macroStatus?.playing ?? false;
 
+  const getRobotIdForMacro = useCallback(
+    (macro: MacroInfo) => {
+      if (macro.type === "mobile") {
+        const mobileRobotId = robots.findIndex(
+          (robot) => robot.robot_type === "mobile",
+        );
+        if (mobileRobotId >= 0) return mobileRobotId;
+        toast.error("No Go2/mobile robot is connected.");
+        return null;
+      }
+      return robotId;
+    },
+    [robots, robotId],
+  );
+
   const startRecording = useCallback(async () => {
     if (!macroName.trim()) {
       toast.error("Enter a name for the macro.");
@@ -96,19 +113,22 @@ export function MacrosControl() {
   }, [macroName, mutateMacros, mutateStatus]);
 
   const playMacro = useCallback(
-    async (name: string, loop: boolean = false) => {
+    async (macro: MacroInfo, loop: boolean = false) => {
+      const replayRobotId = getRobotIdForMacro(macro);
+      if (replayRobotId === null) return;
+
       const resp = await fetchWithBaseUrl("/macro/play", "POST", {
-        name,
-        robot_id: robotId,
+        name: macro.name,
+        robot_id: replayRobotId,
         loop,
         speed: playSpeed,
       });
       if (resp) {
-        toast.success(resp.message || `Playing "${name}"`);
+        toast.success(resp.message || `Playing "${macro.name}"`);
         mutateStatus();
       }
     },
-    [robotId, playSpeed, mutateStatus],
+    [getRobotIdForMacro, playSpeed, mutateStatus],
   );
 
   const stopPlayback = useCallback(async () => {
@@ -275,14 +295,17 @@ export function MacrosControl() {
                     <p className="font-medium text-sm truncate">{macro.name}</p>
                     <p className="text-xs text-muted-foreground">
                       {macro.duration_s.toFixed(1)}s | {macro.frame_count}{" "}
-                      frames | {macro.joint_count} joints
+                      frames |{" "}
+                      {macro.type === "mobile"
+                        ? "Go2 movement"
+                        : `${macro.joint_count} joints`}
                     </p>
                   </div>
                   <div className="flex gap-1 ml-2">
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => playMacro(macro.name, false)}
+                      onClick={() => playMacro(macro, false)}
                       disabled={isRecording || isPlaying}
                       title="Play once"
                     >
@@ -291,7 +314,7 @@ export function MacrosControl() {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => playMacro(macro.name, true)}
+                      onClick={() => playMacro(macro, true)}
                       disabled={isRecording || isPlaying}
                       title="Loop"
                     >

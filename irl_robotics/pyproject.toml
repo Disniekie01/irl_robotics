@@ -53,6 +53,7 @@ dependencies = [
     "pyzmq>=27.0.2",
     "textual>=6.1.0",
     "msgpack>=1.0.5",
+    "unitree-webrtc-connect>=2.1.2",
 ]
 
 [dependency-groups]

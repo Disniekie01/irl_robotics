@@ -31,6 +31,7 @@ const routeMap = [
   { path: "/", title: "Dashboard" },
   { path: "/visualizer", title: "3D Visualizer" },
   { path: "/control", title: "Robot Control" },
+  { path: "/demo", title: "Demo" },
   { path: "/calibration", title: "Calibration" },
   { path: "/skills", title: "Skill Graph Editor" },
   { path: "/inference", title: "AI Control" },

@@ -8,6 +8,7 @@ import {
   Home,
   Network,
   Play,
+  Presentation,
   Radio,
   Sliders,
   Workflow,
@@ -36,6 +37,7 @@ const navGroups: { label: string; items: NavItemDef[] }[] = [
     label: "Control & Record",
     items: [
       { path: "/control", icon: Play, label: "Control Robot", iconClass: "text-indigo-400" },
+      { path: "/demo", icon: Presentation, label: "Demo", iconClass: "text-amber-500" },
       { path: "/browse", icon: FolderOpen, label: "Datasets", prefix: true },
       { path: "/calibration", icon: Sliders, label: "Calibration" },
       { path: "/skills", icon: Workflow, label: "Skill Graph", iconClass: "text-purple-400" },

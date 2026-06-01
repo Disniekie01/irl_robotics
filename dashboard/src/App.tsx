@@ -4,6 +4,7 @@ import { Layout } from "@/components/layout/layout";
 import { CommandPalette } from "@/components/command-palette/CommandPalette";
 import { NotificationWatcher } from "@/components/notifications/NotificationWatcher";
 import { RobotModeSelector } from "@/components/startup/RobotModeSelector";
+import { DemoPage } from "@/pages/DemoPage";
 
 class RouteErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -82,6 +83,8 @@ function App() {
             <Route path="/skills" element={<SkillGraphPage />} />
             <Route path="/viz" element={<ViewVideoPage />} />
             <Route path="/docs" element={<DocsPage />} />
+            <Route path="/demo" element={<DemoPage />} />
+            <Route path="/dashboard/demo" element={<DemoPage />} />
             <Route path="/auth" element={<AuthForm />} />
             <Route path="/sign-in" element={<AuthForm />} />
             <Route path="/sign-up" element={<AuthForm />} />

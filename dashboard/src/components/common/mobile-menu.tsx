@@ -17,6 +17,7 @@ import {
   Home,
   Network,
   Play,
+  Presentation,
   Sliders,
 } from "lucide-react";
 import { Menu } from "lucide-react";
@@ -66,6 +67,15 @@ export function MobileMenu() {
             >
               <Play className="h-4 w-4 text-indigo-400" />
               Control Robot
+            </a>
+            <a
+              href="/demo"
+              className={`flex items-center gap-3 px-2 py-1.5 rounded-md ${
+                currentPath === "/demo" ? "bg-accent" : "hover:bg-accent/50"
+              }`}
+            >
+              <Presentation className="h-4 w-4 text-amber-500" />
+              Demo
             </a>
             <a
               href="/browse"

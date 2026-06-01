@@ -15,3 +15,4 @@ from .isaacsim import router as isaacsim_router
 from .skillgraph import router as skillgraph_router
 from .setup import router as setup_router
 from .update import router as update_router
+from .demo import router as demo_router

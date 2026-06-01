@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import atexit
 import base64
@@ -22,11 +24,16 @@ from typing import (
     cast,
 )
 
-import cv2
 import numpy as np
 import zmq
 from fastapi import Request
 from loguru import logger
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None  # type: ignore[assignment]
+    logger.debug("OpenCV is not available; physical camera support is disabled")
 
 from irl_robotics.configs import config
 from irl_robotics.models import AllCamerasStatus, SingleCameraStatus

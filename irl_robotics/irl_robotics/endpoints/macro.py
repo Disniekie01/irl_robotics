@@ -24,6 +24,9 @@ _cancel_playback = False
 _recorded_frames: List[dict] = []
 _record_task: Optional[asyncio.Task] = None
 _play_task: Optional[asyncio.Task] = None
+_recording_robot_id: Optional[int] = None
+_recording_kind: str = "joint"
+_record_start_time: float = 0.0
 
 
 class MacroInfo(BaseModel):
@@ -32,6 +35,7 @@ class MacroInfo(BaseModel):
     frame_count: int
     joint_count: int
     created_at: float
+    type: str = "joint"
 
 
 class MacroListResponse(BaseModel):
@@ -55,6 +59,55 @@ class PlayRequest(BaseModel):
 class StatusResponse(BaseModel):
     status: str
     message: str = ""
+
+
+def _safe_macro_name(name: str) -> str:
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "" for c in name).strip()
+    return safe_name or f"macro_{int(time.time())}"
+
+
+def record_mobile_command(
+    robot_id: int,
+    x: Optional[float],
+    y: Optional[float],
+    rz: Optional[float],
+) -> None:
+    """Record mobile robot drive commands while a mobile macro is active.
+
+    Values are stored in backend units: x/y in meters and rz in radians.
+    """
+    if (
+        not _recording
+        or _recording_kind != "mobile"
+        or _recording_robot_id != robot_id
+    ):
+        return
+
+    x_val = float(x or 0.0)
+    y_val = float(y or 0.0)
+    rz_val = float(rz or 0.0)
+    is_stop_command = (
+        abs(x_val) < 1e-6 and abs(y_val) < 1e-6 and abs(rz_val) < 1e-6
+    )
+    if is_stop_command:
+        if not _recorded_frames:
+            return
+        last_frame = _recorded_frames[-1]
+        last_was_stop = all(
+            abs(float(last_frame.get(axis, 0.0))) < 1e-6 for axis in ("x", "y", "rz")
+        )
+        if last_was_stop:
+            return
+
+    elapsed = time.time() - _record_start_time
+    _recorded_frames.append(
+        {
+            "t": round(elapsed, 4),
+            "x": round(x_val, 6),
+            "y": round(y_val, 6),
+            "rz": round(rz_val, 6),
+        }
+    )
 
 
 async def _record_loop(
@@ -179,25 +232,96 @@ async def _play_loop(
         logger.info("Macro playback ended")
 
 
+async def _play_mobile_loop(
+    rcm: RobotConnectionManager,
+    robot_id: int,
+    frames: List[dict],
+    loop: bool,
+    speed: float,
+) -> None:
+    global _playing, _cancel_playback
+
+    robot = await rcm.get_robot(robot_id)
+    logger.info(
+        f"Mobile macro playback started: {len(frames)} frames, speed={speed}x, loop={loop}"
+    )
+
+    try:
+        while True:
+            previous_t = frames[0].get("t", 0.0) if frames else 0.0
+            for frame in frames:
+                if _cancel_playback:
+                    logger.info("Mobile macro playback cancelled")
+                    return
+
+                frame_t = float(frame.get("t", previous_t))
+                wait = max((frame_t - previous_t) / speed, 0.0)
+                if wait > 0:
+                    await asyncio.sleep(wait)
+
+                await robot.move_robot_relative(
+                    target_position=np.array(
+                        [
+                            float(frame.get("x", 0.0)),
+                            float(frame.get("y", 0.0)),
+                            0.0,
+                        ]
+                    ),
+                    target_orientation_rad=np.array(
+                        [0.0, 0.0, float(frame.get("rz", 0.0))]
+                    ),
+                )
+                previous_t = frame_t
+
+            if not loop:
+                break
+    except Exception as e:
+        logger.error(f"Mobile macro playback error: {e}")
+    finally:
+        try:
+            await robot.move_robot_relative(
+                target_position=np.array([0.0, 0.0, 0.0]),
+                target_orientation_rad=np.array([0.0, 0.0, 0.0]),
+            )
+        except Exception:
+            pass
+        _playing = False
+        _cancel_playback = False
+        logger.info("Mobile macro playback ended")
+
+
 @router.post("/record/start", response_model=StatusResponse)
 async def start_recording(
     req: StartRecordRequest,
     rcm: RobotConnectionManager = Depends(get_rcm),
 ) -> StatusResponse:
-    global _recording, _record_task
+    global _recording, _record_task, _recorded_frames
+    global _recording_robot_id, _recording_kind, _record_start_time
 
     if _recording:
         raise HTTPException(status_code=400, detail="Already recording a macro.")
     if _playing:
         raise HTTPException(status_code=400, detail="Cannot record while playing.")
 
-    # Validate robot exists
-    await rcm.get_robot(req.robot_id)
+    robot = await rcm.get_robot(req.robot_id)
+    robot_type = getattr(robot.status(), "robot_type", "manipulator")
 
     _recording = True
-    _record_task = asyncio.create_task(_record_loop(rcm, req.robot_id, req.fps))
+    _recorded_frames = []
+    _recording_robot_id = req.robot_id
+    _record_start_time = time.time()
 
-    return StatusResponse(status="ok", message=f"Recording macro '{req.name}' at {req.fps} FPS")
+    if robot_type == "mobile":
+        _recording_kind = "mobile"
+        _record_task = None
+        logger.info("Mobile macro recording started")
+    else:
+        _recording_kind = "joint"
+        _record_task = asyncio.create_task(_record_loop(rcm, req.robot_id, req.fps))
+
+    return StatusResponse(
+        status="ok", message=f"Recording macro '{req.name}' at {req.fps} FPS"
+    )
 
 
 @router.post("/record/stop", response_model=StatusResponse)
@@ -205,6 +329,7 @@ async def stop_recording(
     name: Optional[str] = None,
 ) -> StatusResponse:
     global _recording, _recorded_frames, _record_task
+    global _recording_robot_id, _recording_kind
 
     if not _recording:
         raise HTTPException(status_code=400, detail="Not currently recording.")
@@ -219,21 +344,26 @@ async def stop_recording(
         _record_task = None
 
     if len(_recorded_frames) == 0:
+        _recording_robot_id = None
+        _recording_kind = "joint"
         return StatusResponse(status="error", message="No frames recorded.")
 
     # Use the name from the start request or override
     macro_name = name or "untitled"
-    safe_name = "".join(c if c.isalnum() or c in "-_ " else "" for c in macro_name).strip()
-    if not safe_name:
-        safe_name = f"macro_{int(time.time())}"
+    safe_name = _safe_macro_name(macro_name)
 
     file_path = MACROS_DIR / f"{safe_name}.json"
 
     duration = _recorded_frames[-1]["t"] if _recorded_frames else 0
-    joint_count = len(_recorded_frames[0]["q"]) if _recorded_frames else 0
+    is_mobile_macro = _recording_kind == "mobile"
+    if is_mobile_macro:
+        joint_count = 0
+    else:
+        joint_count = len(_recorded_frames[0]["q"]) if _recorded_frames else 0
 
     macro_data = {
         "name": safe_name,
+        "type": "mobile" if is_mobile_macro else "joint",
         "created_at": time.time(),
         "duration_s": round(duration, 2),
         "frame_count": len(_recorded_frames),
@@ -244,8 +374,12 @@ async def stop_recording(
 
     file_path.write_text(json.dumps(macro_data, indent=2))
     _recorded_frames = []
+    _recording_robot_id = None
+    _recording_kind = "joint"
 
-    logger.info(f"Macro saved: {safe_name} ({len(macro_data['frames'])} frames, {duration:.1f}s)")
+    logger.info(
+        f"Macro saved: {safe_name} ({len(macro_data['frames'])} frames, {duration:.1f}s)"
+    )
 
     return StatusResponse(
         status="ok",
@@ -265,7 +399,7 @@ async def play_macro(
     if _recording:
         raise HTTPException(status_code=400, detail="Cannot play while recording.")
 
-    safe_name = "".join(c if c.isalnum() or c in "-_ " else "" for c in req.name).strip()
+    safe_name = _safe_macro_name(req.name)
     file_path = MACROS_DIR / f"{safe_name}.json"
 
     if not file_path.exists():
@@ -277,17 +411,55 @@ async def play_macro(
     if not raw_frames:
         raise HTTPException(status_code=400, detail="Macro has no frames.")
 
+    macro_type = macro_data.get("type", "joint")
     fps = macro_data.get("fps", 30.0)
-    frames = _normalize_frames(raw_frames, fps)
+    frames = raw_frames if macro_type == "mobile" else _normalize_frames(raw_frames, fps)
 
-    # Validate robot
-    await rcm.get_robot(req.robot_id)
+    selected_robot_id = req.robot_id
+    robot = await rcm.get_robot(selected_robot_id)
+    robot_type = getattr(robot.status(), "robot_type", "manipulator")
+    if macro_type == "mobile" and robot_type != "mobile":
+        for idx, candidate in enumerate(await rcm.robots):
+            if getattr(candidate.status(), "robot_type", "manipulator") == "mobile":
+                selected_robot_id = idx
+                robot = candidate
+                robot_type = "mobile"
+                break
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Mobile macros can only play on a mobile robot.",
+            )
+    if macro_type != "mobile" and robot_type == "mobile":
+        for idx, candidate in enumerate(await rcm.robots):
+            if getattr(candidate.status(), "robot_type", "manipulator") != "mobile":
+                selected_robot_id = idx
+                robot = candidate
+                robot_type = getattr(candidate.status(), "robot_type", "manipulator")
+                break
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Joint macros can only play on a manipulator.",
+            )
 
     _playing = True
     _cancel_playback = False
-    _play_task = asyncio.create_task(
-        _play_loop(rcm, req.robot_id, frames, req.loop, req.speed, req.interpolation_factor)
-    )
+    if macro_type == "mobile":
+        _play_task = asyncio.create_task(
+            _play_mobile_loop(rcm, selected_robot_id, frames, req.loop, req.speed)
+        )
+    else:
+        _play_task = asyncio.create_task(
+            _play_loop(
+                rcm,
+                selected_robot_id,
+                frames,
+                req.loop,
+                req.speed,
+                req.interpolation_factor,
+            )
+        )
 
     return StatusResponse(
         status="ok",
@@ -320,6 +492,7 @@ async def list_macros() -> MacroListResponse:
                     frame_count=data.get("frame_count", 0),
                     joint_count=data.get("joint_count", 0),
                     created_at=data.get("created_at", f.stat().st_mtime),
+                    type=data.get("type", "joint"),
                 )
             )
         except Exception:
@@ -346,4 +519,5 @@ async def macro_status() -> dict:
         "recording": _recording,
         "playing": _playing,
         "recorded_frames": len(_recorded_frames),
+        "recording_type": _recording_kind if _recording else None,
     }

@@ -41,6 +41,7 @@ from irl_robotics.endpoints import (
     setup_router,
     skillgraph_router,
     update_router,
+    demo_router,
 )
 from irl_robotics.endpoints.ros2 import (
     kill_orphan_ros2_bridge_processes,
@@ -159,6 +160,18 @@ app.mount(
 _urdf_path = get_resources_path() / "dist" / "urdf"
 if _urdf_path.exists() and _urdf_path.is_dir():
     app.mount("/urdf", StaticFiles(directory=str(_urdf_path)), name="urdf")
+
+
+@app.get("/dashboard/demo", response_class=HTMLResponse)
+async def serve_dashboard_demo_alias() -> HTMLResponse:
+    index_path = get_resources_path() / "dist" / "index.html"
+    with open(index_path.resolve(), "r") as f:
+        content = f.read()
+    return HTMLResponse(
+        headers={"Content-Type": "text/html; charset=utf-8"}, content=content
+    )
+
+
 app.mount(
     "/dashboard",
     StaticFiles(directory=get_resources_path() / "dist", html=True),
@@ -269,6 +282,7 @@ app.include_router(gpu_router)
 app.include_router(isaacsim_router)
 app.include_router(setup_router)
 app.include_router(skillgraph_router)
+app.include_router(demo_router)
 
 # TODO : Only allow secured origins
 app.add_middleware(

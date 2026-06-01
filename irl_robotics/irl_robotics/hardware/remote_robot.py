@@ -136,6 +136,11 @@ class RemoteRobot(BaseRobot):
         self.initial_orientation_rad: Optional[np.ndarray] = None
         self.device_name = f"{self.ip}:{self.port}"
         self._ws_transport: Optional[_WebSocketTransport] = None
+        # Defaults for SO-100-like remote manipulators. /robot/config can
+        # override these when the remote server supports the full API.
+        self.SERVO_IDS = list(range(1, 7))
+        self.GRIPPER_JOINT_INDEX = 5
+        self.RESOLUTION = 4096
 
     @property
     def is_connected(self) -> bool:

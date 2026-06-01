@@ -118,6 +118,12 @@ async def start_recording_episode(
         query.leader_arm_ids = []
 
     for i, robot in enumerate(robots):
+        if not isinstance(robot, BaseManipulator):
+            logger.debug(
+                f"Skipping {getattr(robot, 'name', robot)} for dataset recording "
+                "(manipulators only; use Macros for mobile robots)"
+            )
+            continue
         if signal_leader_follower.is_in_loop():
             # Leader-follower mode
             if getattr(robot, "SERIAL_ID", None) in query.leader_arm_ids:
@@ -425,13 +431,24 @@ async def play_recording(
             ):
                 robots.remove(robot)
 
-    # the episode cannot be None since episode_path and recorder.episode cannot be none simultaneously
-    await episode.play(  # type: ignore
-        robots=robots,  # type: ignore
-        playback_speed=query.playback_speed,
-        interpolation_factor=query.interpolation_factor,
-        replicate=query.replicate,
-    )
+    try:
+        # the episode cannot be None since episode_path and recorder.episode cannot be none simultaneously
+        await episode.play(  # type: ignore
+            robots=robots,  # type: ignore
+            playback_speed=query.playback_speed,
+            interpolation_factor=query.interpolation_factor,
+            replicate=query.replicate,
+        )
+    except ValueError as e:
+        if "Robot configuration is not set" in str(e):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Dataset replay is for calibrated arm recordings. "
+                    "For Go2/dog movement, replay the saved item from Control > Macros."
+                ),
+            )
+        raise
     return StatusResponse()
 
 

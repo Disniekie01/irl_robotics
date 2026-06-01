@@ -7,8 +7,12 @@ from dataclasses import dataclass
 from typing import Any, Coroutine, Deque, Literal, Optional, Tuple
 
 import numpy as np
-from go2_webrtc_driver.constants import RTC_TOPIC, SPORT_CMD
-from go2_webrtc_driver.webrtc_driver import Go2WebRTCConnection, WebRTCConnectionMethod
+from unitree_webrtc_connect import (
+    RTC_TOPIC,
+    SPORT_CMD,
+    UnitreeWebRTCConnection,
+    WebRTCConnectionMethod,
+)
 from loguru import logger
 
 from irl_robotics.hardware.base import BaseMobileRobot
@@ -19,6 +23,23 @@ from irl_robotics.models import RobotConfigStatus
 class MovementCommand:
     position: np.ndarray
     orientation: Optional[np.ndarray] = None
+
+
+# Unitree LowState motor_state order: FR, FL, RR, RL (hip, thigh, calf each).
+GO2_LEG_JOINT_NAMES: tuple[str, ...] = (
+    "FR_hip_joint",
+    "FR_thigh_joint",
+    "FR_calf_joint",
+    "FL_hip_joint",
+    "FL_thigh_joint",
+    "FL_calf_joint",
+    "RR_hip_joint",
+    "RR_thigh_joint",
+    "RR_calf_joint",
+    "RL_hip_joint",
+    "RL_thigh_joint",
+    "RL_calf_joint",
+)
 
 
 class UnitreeGo2(BaseMobileRobot):
@@ -35,7 +56,7 @@ class UnitreeGo2(BaseMobileRobot):
             **kwargs: Additional keyword arguments
         """
         self.ip = ip
-        self.conn: Optional[Go2WebRTCConnection] = None
+        self.conn: Optional[UnitreeWebRTCConnection] = None
         self.current_position = np.zeros(3)  # [x, y, z]
         self.current_orientation = np.zeros(3)  # [roll, pitch, yaw]
         self._is_connected = False
@@ -162,7 +183,7 @@ class UnitreeGo2(BaseMobileRobot):
         try:
             # Create connection and connect
             try:
-                self.conn = Go2WebRTCConnection(
+                self.conn = UnitreeWebRTCConnection(
                     WebRTCConnectionMethod.LocalSTA, ip=self.ip
                 )
                 if self.conn is None:
@@ -183,7 +204,7 @@ class UnitreeGo2(BaseMobileRobot):
             # self.disconnect()
 
             # # Connect again
-            # self.conn = Go2WebRTCConnection(WebRTCConnectionMethod.LocalSTA, ip=self.ip)
+            # self.conn = UnitreeWebRTCConnection(WebRTCConnectionMethod.LocalSTA, ip=self.ip)
             # await asyncio.wait_for(self.conn.connect(), timeout=10.0)
             # await self._ensure_moving_mode()
 
@@ -252,6 +273,30 @@ class UnitreeGo2(BaseMobileRobot):
             self.conn = None
             self.is_connected = False
             self._connection_loop = None
+
+    def get_leg_joint_positions_rad(self) -> Optional[dict[str, float]]:
+        """Parse revolute leg joint angles (rad) from the latest lowstate message."""
+        if not self.lowstate:
+            return None
+        motor_state = self.lowstate.get("motor_state")
+        if motor_state is None:
+            motor_state = self.lowstate.get("motorState")
+        if not motor_state:
+            return None
+
+        joints: dict[str, float] = {}
+        for index, joint_name in enumerate(GO2_LEG_JOINT_NAMES):
+            if index >= len(motor_state):
+                break
+            motor = motor_state[index]
+            q: Any = None
+            if isinstance(motor, dict):
+                q = motor.get("q")
+            else:
+                q = getattr(motor, "q", None)
+            if q is not None:
+                joints[joint_name] = float(q)
+        return joints or None
 
     def get_observation(
         self, source: Literal["sim", "robot"], do_forward: bool = False
