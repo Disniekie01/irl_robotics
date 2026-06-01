@@ -61,33 +61,70 @@ class LeaderFollowerThread(threading.Thread):
         self.warning_dropping_joints_displayed = False
         self._follower_torque_baseline: Dict[str, np.ndarray] = {}
         self._haptic_ema: Dict[str, np.ndarray] = {}
+        # Per pair: (leader_start_rad, follower_start_rad) at teleop start
+        self._relative_starts: Dict[str, tuple[np.ndarray, np.ndarray]] = {}
+
+    def _pair_key(self, pair: RobotPair) -> str:
+        def _robot_id(robot: Union[BaseManipulator, RemoteRobot]) -> str:
+            return str(
+                getattr(robot, "device_name", None)
+                or getattr(robot, "SERIAL_ID", None)
+                or id(robot)
+            )
+
+        return (
+            f"{pair.leader.name}:{_robot_id(pair.leader)}"
+            f"->{pair.follower.name}:{_robot_id(pair.follower)}"
+        )
+
+    def _read_joint_pose(self, robot: Union[BaseManipulator, RemoteRobot]) -> np.ndarray:
+        joints = np.array(
+            robot.read_joints_position(unit="rad", source="robot"), dtype=float
+        )
+        if np.any(np.isnan(joints)):
+            raise ValueError(f"NaN joint read from {robot.name} ({robot.device_name})")
+        return joints
+
+    def _capture_relative_starts(self) -> None:
+        """Snapshot poses at teleop start so the follower mirrors deltas, not absolute pose."""
+        self._relative_starts = {}
+        for pair in self.robot_pairs:
+            key = self._pair_key(pair)
+            leader_start = self._read_joint_pose(pair.leader)
+            follower_start = self._read_joint_pose(pair.follower)
+            n = min(len(leader_start), len(follower_start))
+            self._relative_starts[key] = (
+                leader_start[:n].copy(),
+                follower_start[:n].copy(),
+            )
+            logger.info(
+                f"Relative teleop start for {key}: "
+                f"leader joints={n}, follower stays at current pose (no homing jump)"
+            )
+
+    def _relative_follower_target(
+        self, pair: RobotPair, leader_target_rad: np.ndarray
+    ) -> np.ndarray:
+        """follower = follower_start + (leader_target - leader_start), optional base invert."""
+        leader_start, follower_start = self._relative_starts[self._pair_key(pair)]
+        target = np.asarray(leader_target_rad, dtype=float)
+        n = len(follower_start)
+        leader_delta = target[:n] - leader_start[:n]
+        if self.invert_controls and n > 0:
+            leader_delta[0] = -leader_delta[0]
+        out = follower_start.copy()
+        out[:n] = follower_start[:n] + leader_delta
+        return out
 
     def _run_async(self, coro: Coroutine) -> Any:
         """Helper function to run async code from within the thread."""
         return asyncio.run(coro)
 
     def _setup_robots(self) -> None:
-        """Initializes robots, moves them to the initial position, and sets up PID gains."""
-        logger.info("Setting up robots for leader-follower control.")
-
-        # Check if the initial position is set, otherwise move them
-        wait_for_initial_position = False
-        for pair in self.robot_pairs:
-            for robot in [pair.leader, pair.follower]:
-                if (
-                    robot.initial_position is None
-                    or robot.initial_orientation_rad is None
-                ):
-                    logger.warning(
-                        f"Initial position or orientation not set for {robot.name} {robot.device_name}. "
-                        "Moving to initial position before starting."
-                    )
-                    robot.enable_torque()
-                    self._run_async(robot.move_to_initial_position())
-                    wait_for_initial_position = True
-
-        if wait_for_initial_position:
-            time.sleep(1)
+        """Enable torque / PID; do not homing-move arms (relative start avoids teleop jump)."""
+        logger.info(
+            "Setting up robots for leader-follower control (relative start, no homing jump)."
+        )
 
         # Store original PID gains and apply new ones
         for pair in self.robot_pairs:
@@ -204,6 +241,9 @@ class LeaderFollowerThread(threading.Thread):
     def run(self) -> None:
         """The main control loop of the thread."""
         self._setup_robots()
+        if not self.control_signal.is_in_loop():
+            return
+        self._capture_relative_starts()
         logger.info(
             f"Starting leader-follower control with {len(self.robot_pairs)} pairs of robots:"
             + ", ".join(
@@ -222,6 +262,7 @@ class LeaderFollowerThread(threading.Thread):
                 if self.compensation_values
                 else ""
             )
+            + "\nrelative_start=True (follower mirrors leader deltas from current pose)"
         )
 
         try:
@@ -246,7 +287,10 @@ class LeaderFollowerThread(threading.Thread):
                             follower, SO100Hardware
                         ), "Haptic feedback is only supported for SO100Hardware."
                         self._haptic_feedback_step(
-                            leader=leader, follower=follower, pos_rad=pos_rad
+                            pair=pair,
+                            leader=leader,
+                            follower=follower,
+                            pos_rad=pos_rad,
                         )
                     elif self.enable_gravity_compensation:
                         assert isinstance(
@@ -256,11 +300,17 @@ class LeaderFollowerThread(threading.Thread):
                             follower, SO100Hardware
                         ), "Gravity compensation is only supported for SO100Hardware."
                         self._gravity_compensation_step(
-                            leader=leader, follower=follower, pos_rad=pos_rad
+                            pair=pair,
+                            leader=leader,
+                            follower=follower,
+                            pos_rad=pos_rad,
                         )
                     else:
                         self._simple_mirroring_step(
-                            leader=leader, follower=follower, pos_rad=pos_rad
+                            pair=pair,
+                            leader=leader,
+                            follower=follower,
+                            pos_rad=pos_rad,
                         )
 
                 elapsed = time.perf_counter() - start_time
@@ -275,33 +325,37 @@ class LeaderFollowerThread(threading.Thread):
 
     def _simple_mirroring_step(
         self,
+        pair: RobotPair,
         leader: Union[BaseManipulator, RemoteRobot],
         follower: Union[BaseManipulator, RemoteRobot],
         pos_rad: np.ndarray,
     ) -> None:
-        """Follower mirrors the leader's position."""
-        if self.invert_controls:
-            pos_rad[0] = -pos_rad[0]
-
-        follower.control_gripper(
-            open_command=leader._rad_to_open_command(
-                pos_rad[leader.GRIPPER_JOINT_INDEX]
-            )
-        )
-
-        if len(pos_rad) > len(follower.SERVO_IDS):
+        """Follower mirrors leader joint deltas from teleop start (no initial snap)."""
+        leader_target = np.asarray(pos_rad, dtype=float)
+        if len(leader_target) > len(follower.SERVO_IDS):
             if not self.warning_dropping_joints_displayed:
                 logger.warning(
-                    f"Leader has more joints than follower ({len(pos_rad)} > {len(follower.SERVO_IDS)}). "
+                    f"Leader has more joints than follower ({len(leader_target)} > {len(follower.SERVO_IDS)}). "
                     "Dropping extra joints."
                 )
                 self.warning_dropping_joints_displayed = True
-            pos_rad = pos_rad[: len(follower.SERVO_IDS)]
+            leader_target = leader_target[: len(follower.SERVO_IDS)]
 
-        follower.set_motors_positions(q_target_rad=pos_rad, enable_gripper=False)
+        follower_target = self._relative_follower_target(pair, leader_target)
+
+        follower.control_gripper(
+            open_command=leader._rad_to_open_command(
+                leader_target[leader.GRIPPER_JOINT_INDEX]
+            )
+        )
+
+        follower.set_motors_positions(
+            q_target_rad=follower_target, enable_gripper=False
+        )
 
     def _gravity_compensation_step(
         self,
+        pair: RobotPair,
         leader: SO100Hardware,
         follower: SO100Hardware,
         pos_rad: np.ndarray,
@@ -353,35 +407,31 @@ class LeaderFollowerThread(threading.Thread):
         theta_des_rad = pos_rad + self.alpha[:num_joints] * np.array(tau_g)
         leader.write_joint_positions(theta_des_rad, unit="rad")
 
-        # Invert the base rotation if specified
-        if self.invert_controls:
-            theta_des_rad[0] = -theta_des_rad[0]
+        leader_target = np.asarray(theta_des_rad, dtype=float)
+        if len(leader_target) > len(follower.SERVO_IDS):
+            if not self.warning_dropping_joints_displayed:
+                logger.warning(
+                    f"Leader has more joints than follower ({len(leader_target)} > {len(follower.SERVO_IDS)}). "
+                    "Dropping extra joints for follower command."
+                )
+                self.warning_dropping_joints_displayed = True
+            leader_target = leader_target[: len(follower.SERVO_IDS)]
 
-        # Mirror the leader's gripper position to the follower
+        follower_target = self._relative_follower_target(pair, leader_target)
+
         follower.control_gripper(
             open_command=leader._rad_to_open_command(
-                theta_des_rad[leader.GRIPPER_JOINT_INDEX]
+                leader_target[leader.GRIPPER_JOINT_INDEX]
             )
         )
 
-        # Ensure follower receives commands for the correct number of joints
-        if len(theta_des_rad) > len(follower.SERVO_IDS):
-            if not self.warning_dropping_joints_displayed:
-                logger.warning(
-                    f"Leader has more joints than follower ({len(theta_des_rad)} > {len(follower.SERVO_IDS)}). "
-                    "Dropping extra joints for follower command."
-                )
-                self.warning_dropping_joints_displayed = (
-                    True  # Ensure the warning is displayed only once
-                )
-            # Truncate the position array to match the follower's joint count
-            theta_des_rad = theta_des_rad[: len(follower.SERVO_IDS)]
-
-        # Command the follower to mirror the leader's final position
-        follower.set_motors_positions(q_target_rad=theta_des_rad, enable_gripper=False)
+        follower.set_motors_positions(
+            q_target_rad=follower_target, enable_gripper=False
+        )
 
     def _haptic_feedback_step(
         self,
+        pair: RobotPair,
         leader: SO100Hardware,
         follower: SO100Hardware,
         pos_rad: np.ndarray,
@@ -443,25 +493,24 @@ class LeaderFollowerThread(threading.Thread):
         theta_des_rad = theta_des_rad + haptic_offset
         leader.write_joint_positions(theta_des_rad, unit="rad")
 
-        # --- Mirror to follower ---
-        follower_target = pos_rad.copy()
-        if self.invert_controls:
-            follower_target[0] = -follower_target[0]
-
-        follower.control_gripper(
-            open_command=leader._rad_to_open_command(
-                follower_target[leader.GRIPPER_JOINT_INDEX]
-            )
-        )
-
-        if len(follower_target) > len(follower.SERVO_IDS):
+        # --- Mirror leader deltas to follower (not absolute pose) ---
+        leader_target = np.asarray(pos_rad, dtype=float)
+        if len(leader_target) > len(follower.SERVO_IDS):
             if not self.warning_dropping_joints_displayed:
                 logger.warning(
-                    f"Leader has more joints than follower ({len(follower_target)} > {len(follower.SERVO_IDS)}). "
+                    f"Leader has more joints than follower ({len(leader_target)} > {len(follower.SERVO_IDS)}). "
                     "Dropping extra joints for follower command."
                 )
                 self.warning_dropping_joints_displayed = True
-            follower_target = follower_target[: len(follower.SERVO_IDS)]
+            leader_target = leader_target[: len(follower.SERVO_IDS)]
+
+        follower_target = self._relative_follower_target(pair, leader_target)
+
+        follower.control_gripper(
+            open_command=leader._rad_to_open_command(
+                leader_target[leader.GRIPPER_JOINT_INDEX]
+            )
+        )
 
         follower.set_motors_positions(
             q_target_rad=follower_target, enable_gripper=False
