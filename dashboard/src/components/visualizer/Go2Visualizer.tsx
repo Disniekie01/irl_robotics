@@ -15,9 +15,13 @@ type URDFRobot = THREE.Object3D & {
 function Go2Model({
   joints,
   armJointAngles,
+  armMountPosition,
+  armMountRotation,
 }: {
   joints: Record<string, number>;
   armJointAngles: number[];
+  armMountPosition: [number, number, number];
+  armMountRotation: [number, number, number];
 }) {
   const rootRef = useRef<THREE.Group>(null);
   const robotRef = useRef<URDFRobot | null>(null);
@@ -80,7 +84,11 @@ function Go2Model({
 
   return (
     <group ref={rootRef}>
-      <SO100OnGo2Mount jointAngles={armJointAngles} />
+      <SO100OnGo2Mount
+        jointAngles={armJointAngles}
+        position={armMountPosition}
+        rotation={armMountRotation}
+      />
     </group>
   );
 }
@@ -88,10 +96,14 @@ function Go2Model({
 export function Go2Visualizer({
   joints,
   armJointAngles = [0, 0, 0, 0, 0, 0],
+  armMountPosition = [0.19, 0.43, 0.02],
+  armMountRotation = [Math.PI / 2, Math.PI / 2, -Math.PI / 2],
   height = 420,
 }: {
   joints: Record<string, number>;
   armJointAngles?: number[];
+  armMountPosition?: [number, number, number];
+  armMountRotation?: [number, number, number];
   height?: number;
 }) {
   return (
@@ -112,7 +124,12 @@ export function Go2Visualizer({
           sectionColor="#475569"
         />
         <Suspense fallback={null}>
-          <Go2Model joints={joints} armJointAngles={armJointAngles} />
+          <Go2Model
+            joints={joints}
+            armJointAngles={armJointAngles}
+            armMountPosition={armMountPosition}
+            armMountRotation={armMountRotation}
+          />
         </Suspense>
         <OrbitControls makeDefault target={[0, 0.25, 0]} />
       </Canvas>

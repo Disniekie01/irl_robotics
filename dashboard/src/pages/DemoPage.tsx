@@ -57,6 +57,43 @@ interface DemoGo2JointsResponse {
   message: string;
 }
 
+const ARM_MOUNT_STORAGE_KEY = "irl-demo-arm-mount-v1";
+const DEFAULT_ARM_MOUNT_POSITION: [number, number, number] = [0.19, 0.43, 0.02];
+const DEFAULT_ARM_MOUNT_ROTATION: [number, number, number] = [
+  Math.PI / 2,
+  Math.PI / 2,
+  -Math.PI / 2,
+];
+
+function loadArmMount(): {
+  position: [number, number, number];
+  rotation: [number, number, number];
+} {
+  try {
+    const raw = window.localStorage.getItem(ARM_MOUNT_STORAGE_KEY);
+    if (!raw) {
+      return {
+        position: DEFAULT_ARM_MOUNT_POSITION,
+        rotation: DEFAULT_ARM_MOUNT_ROTATION,
+      };
+    }
+    const parsed = JSON.parse(raw);
+    return {
+      position: Array.isArray(parsed.position)
+        ? (parsed.position.slice(0, 3) as [number, number, number])
+        : DEFAULT_ARM_MOUNT_POSITION,
+      rotation: Array.isArray(parsed.rotation)
+        ? (parsed.rotation.slice(0, 3) as [number, number, number])
+        : DEFAULT_ARM_MOUNT_ROTATION,
+    };
+  } catch {
+    return {
+      position: DEFAULT_ARM_MOUNT_POSITION,
+      rotation: DEFAULT_ARM_MOUNT_ROTATION,
+    };
+  }
+}
+
 function stateBadgeVariant(
   state: ElementState,
 ): "default" | "secondary" | "destructive" | "outline" {
@@ -88,6 +125,9 @@ export function DemoPage() {
   const [dogPort, setDogPort] = useState("8020");
   const [preferredSerial, setPreferredSerial] = useState("");
   const [leaderRobotId, setLeaderRobotId] = useState<string>("");
+  const [{ position: armMountPosition, rotation: armMountRotation }, setArmMount] =
+    useState(loadArmMount);
+  const [lastArmJointAt, setLastArmJointAt] = useState<number | null>(null);
 
   const {
     data: demoStatus,
@@ -123,6 +163,7 @@ export function DemoPage() {
         );
         if (!cancelled && res?.angles && Array.isArray(res.angles)) {
           setArmJointAngles(res.angles.map((a: number | null) => a ?? 0));
+          setLastArmJointAt(Date.now());
         }
       } catch {
         /* follower/leader may be offline */
@@ -148,6 +189,13 @@ export function DemoPage() {
       setLeaderRobotId(String(demoStatus.leader_robot_id));
     }
   }, [demoStatus]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      ARM_MOUNT_STORAGE_KEY,
+      JSON.stringify({ position: armMountPosition, rotation: armMountRotation }),
+    );
+  }, [armMountPosition, armMountRotation]);
 
   const runAction = useCallback(
     async (key: string, fn: () => Promise<void>) => {
@@ -221,6 +269,54 @@ export function DemoPage() {
     });
 
   const elements = demoStatus?.elements ?? [];
+  const blockingElements = elements.filter((el) => el.state === "error");
+  const warnElements = elements.filter((el) => el.state === "warn");
+  const readinessState: ElementState = demoStatus?.leader_follower_active
+    ? "ok"
+    : blockingElements.length > 0
+      ? "error"
+      : warnElements.length > 0
+        ? "warn"
+        : elements.length > 0
+          ? "ok"
+          : "unknown";
+  const readinessTitle = demoStatus?.leader_follower_active
+    ? "Demo running"
+    : readinessState === "ok"
+      ? "Ready to start"
+      : readinessState === "warn"
+        ? "Almost ready"
+        : readinessState === "error"
+          ? "Not ready"
+          : "Waiting for status";
+  const readinessMessage =
+    blockingElements[0]?.message ??
+    warnElements[0]?.message ??
+    "Relative start is enabled: follower arms stay where they are and only follow leader movement deltas.";
+  const armStreamFresh =
+    lastArmJointAt != null && Date.now() - lastArmJointAt < 1500;
+  const go2JointCount = Object.keys(go2Joints?.joints ?? {}).length;
+
+  const nudgeMount = (
+    key: "position" | "rotation",
+    index: 0 | 1 | 2,
+    delta: number,
+  ) => {
+    setArmMount((current) => {
+      const next = {
+        position: [...current.position] as [number, number, number],
+        rotation: [...current.rotation] as [number, number, number],
+      };
+      next[key][index] = Number((next[key][index] + delta).toFixed(4));
+      return next;
+    });
+  };
+
+  const resetMount = () =>
+    setArmMount({
+      position: DEFAULT_ARM_MOUNT_POSITION,
+      rotation: DEFAULT_ARM_MOUNT_ROTATION,
+    });
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -232,15 +328,30 @@ export function DemoPage() {
         </p>
       </div>
 
+      <Alert>
+        <StatusIcon state={readinessState} />
+        <AlertTitle className="flex items-center gap-2">
+          {readinessTitle}
+          <Badge variant={stateBadgeVariant(readinessState)}>{readinessState}</Badge>
+          <Badge variant="outline">No-jump relative start</Badge>
+        </AlertTitle>
+        <AlertDescription>
+          {demoStatus?.leader_follower_active
+            ? `Leader robot ${demoStatus.leader_robot_id ?? "?"} -> follower ${
+                demoStatus.remote_follower_robot_id ?? "?"
+              } on ${sshHost}:${dogPort}`
+            : readinessMessage}
+        </AlertDescription>
+      </Alert>
+
       {demoStatus?.leader_follower_active && (
-        <Alert>
-          <Play className="h-4 w-4" />
-          <AlertTitle>Demo running</AlertTitle>
-          <AlertDescription>
-            Leader robot {demoStatus.leader_robot_id ?? "?"} → follower{" "}
-            {demoStatus.remote_follower_robot_id ?? "?"} on {sshHost}:{dogPort}
-          </AlertDescription>
-        </Alert>
+        <div className="sticky top-3 z-20 flex justify-end">
+          <Button variant="destructive" onClick={stopDemo} disabled={busy !== null}>
+            {busy === "stop" && <Loader2 className="mr-2 size-4 animate-spin" />}
+            <Square className="mr-2 size-4" />
+            Emergency stop demo
+          </Button>
+        </div>
       )}
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -324,7 +435,10 @@ export function DemoPage() {
         <Card>
           <CardHeader>
             <CardTitle>Actions</CardTitle>
-            <CardDescription>Run steps individually or start the full demo.</CardDescription>
+            <CardDescription>
+              Run steps individually or start the full demo. Relative start is always on,
+              so the follower will not snap to calibration zero.
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             <Button variant="outline" onClick={discover} disabled={busy !== null}>
@@ -372,13 +486,121 @@ export function DemoPage() {
           <Go2Visualizer
             joints={go2Joints?.joints ?? {}}
             armJointAngles={armJointAngles}
+            armMountPosition={armMountPosition}
+            armMountRotation={armMountRotation}
           />
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="rounded-lg border border-border p-3">
+              <div className="text-xs text-muted-foreground">Go2 lowstate</div>
+              <div className="mt-1 flex items-center gap-2 text-sm">
+                <Badge variant={go2JointCount > 0 ? "default" : "outline"}>
+                  {go2JointCount > 0 ? "streaming" : "offline"}
+                </Badge>
+                <span>{go2JointCount}/12 joints</span>
+              </div>
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <div className="text-xs text-muted-foreground">Mounted arm joints</div>
+              <div className="mt-1 flex items-center gap-2 text-sm">
+                <Badge variant={armStreamFresh ? "default" : "outline"}>
+                  {armStreamFresh ? "streaming" : "stale"}
+                </Badge>
+                <span>robot_id={armRobotId}</span>
+              </div>
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <div className="text-xs text-muted-foreground">No-jump teleop</div>
+              <div className="mt-1 text-sm">Relative start enabled</div>
+            </div>
+          </div>
           <p className="text-sm text-muted-foreground">
             {go2Joints?.connected
-              ? `robot_id=${go2Joints.robot_id ?? "?"} @ ${go2Joints.ip ?? "?"} — ${go2Joints.message}`
+              ? `robot_id=${go2Joints.robot_id ?? "?"} @ ${go2Joints.ip ?? "?"} - ${go2Joints.message}`
               : go2Joints?.message ??
                 "No Go2 connected. Joints show at zero until lowstate arrives."}
           </p>
+
+          <div className="rounded-lg border border-border p-3 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-medium text-sm">Arm mount alignment</div>
+                <p className="text-xs text-muted-foreground">
+                  Tune the visual SO-100 mount live. Saved in this browser.
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={resetMount}>
+                Reset
+              </Button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <div className="text-xs font-medium text-muted-foreground">
+                  Position [forward, height, side]
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {(["forward", "height", "side"] as const).map((label, index) => (
+                    <div key={label} className="space-y-1">
+                      <div className="text-xs text-center">{label}</div>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => nudgeMount("position", index as 0 | 1 | 2, -0.01)}
+                        >
+                          -
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => nudgeMount("position", index as 0 | 1 | 2, 0.01)}
+                        >
+                          +
+                        </Button>
+                      </div>
+                      <div className="text-[10px] text-center font-mono text-muted-foreground">
+                        {armMountPosition[index].toFixed(2)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs font-medium text-muted-foreground">
+                  Rotation [tilt, yaw, roll]
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {(["tilt", "yaw", "roll"] as const).map((label, index) => (
+                    <div key={label} className="space-y-1">
+                      <div className="text-xs text-center">{label}</div>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            nudgeMount("rotation", index as 0 | 1 | 2, -Math.PI / 18)
+                          }
+                        >
+                          -
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            nudgeMount("rotation", index as 0 | 1 | 2, Math.PI / 18)
+                          }
+                        >
+                          +
+                        </Button>
+                      </div>
+                      <div className="text-[10px] text-center font-mono text-muted-foreground">
+                        {Math.round((armMountRotation[index] * 180) / Math.PI)}deg
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
