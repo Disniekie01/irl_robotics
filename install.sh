@@ -121,6 +121,12 @@ if ! command -v npm &> /dev/null; then
         exit 1
     fi
 else
+    if [ -x "$INSTALL_DIR/scripts/fetch_go2_urdf.sh" ]; then
+        echo "Fetching Go2 dog URDF assets..."
+        "$INSTALL_DIR/scripts/fetch_go2_urdf.sh"
+    else
+        echo "  WARNING: Go2 URDF fetch script not found; dog 3D model may be missing"
+    fi
     cd "$INSTALL_DIR/dashboard"
     [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
     npm install --silent
