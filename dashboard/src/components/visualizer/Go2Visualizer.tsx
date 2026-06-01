@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { ColladaLoader } from "three/examples/jsm/loaders/ColladaLoader.js";
 import URDFLoader from "urdf-loader";
 
-const GO2_URDF_URL = "/urdf/go2_description/urdf/go2_description.urdf";
+const GO2_URDF_URL = "/urdf/go2_description/urdf/go2_description.urdf?v=relative-meshes";
 
 type URDFRobot = THREE.Object3D & {
   joints: Record<string, { setJointValue: (value: number) => void }>;
