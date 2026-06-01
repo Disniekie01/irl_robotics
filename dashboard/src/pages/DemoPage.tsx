@@ -103,6 +103,39 @@ export function DemoPage() {
     { refreshInterval: 200 },
   );
 
+  const [armJointAngles, setArmJointAngles] = useState<number[]>([
+    0, 0, 0, 0, 0, 0,
+  ]);
+
+  const armRobotId =
+    demoStatus?.remote_follower_robot_id ??
+    demoStatus?.leader_robot_id ??
+    (leaderRobotId !== "" ? Number(leaderRobotId) : 0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const pollArm = async () => {
+      try {
+        const res = await fetchWithBaseUrl(
+          `/joints/read?robot_id=${armRobotId}`,
+          "POST",
+          { unit: "rad", joints_ids: null, source: "robot" },
+        );
+        if (!cancelled && res?.angles && Array.isArray(res.angles)) {
+          setArmJointAngles(res.angles.map((a: number | null) => a ?? 0));
+        }
+      } catch {
+        /* follower/leader may be offline */
+      }
+    };
+    pollArm();
+    const id = setInterval(pollArm, 50);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [armRobotId]);
+
   useEffect(() => {
     if (!demoStatus?.config) return;
     setSshHost(demoStatus.config.ssh_host || "10.105.9.173");
@@ -329,14 +362,17 @@ export function DemoPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Go2 (Unitree)</CardTitle>
+          <CardTitle>Dog + mounted arm</CardTitle>
           <CardDescription>
-            Official URDF from unitree_ros. Connect a Go2 via Robots → Add connection
-            (WebRTC) to animate leg joints from lowstate.
+            Go2 URDF (legs from WebRTC lowstate when connected) plus the existing SO-100 STL
+            arm on the back. Arm joints poll from dog follower if connected, else local leader.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Go2Visualizer joints={go2Joints?.joints ?? {}} />
+          <Go2Visualizer
+            joints={go2Joints?.joints ?? {}}
+            armJointAngles={armJointAngles}
+          />
           <p className="text-sm text-muted-foreground">
             {go2Joints?.connected
               ? `robot_id=${go2Joints.robot_id ?? "?"} @ ${go2Joints.ip ?? "?"} — ${go2Joints.message}`

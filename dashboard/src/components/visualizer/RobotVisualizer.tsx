@@ -1,111 +1,11 @@
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Grid } from "@react-three/drei";
-import { useRef, useState, useEffect, useCallback, useMemo, Suspense } from "react";
-import * as THREE from "three";
-import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
-import { useLoader } from "@react-three/fiber";
+import { useRef, useState, useEffect, useCallback, Suspense } from "react";
 import { fetchWithBaseUrl } from "@/lib/utils";
-
-const LERP_FACTOR = 0.25;
+import { SO100ArmModel } from "@/components/visualizer/SO100ArmModel";
 
 const JOINT_NAMES = ["Rotation", "Pitch", "Elbow", "Wrist Pitch", "Wrist Roll", "Jaw"];
 const JOINT_COLORS = ["#6366f1", "#818cf8", "#a78bfa", "#c084fc", "#e879f9", "#f472b6"];
-
-const MESH_BASE = "/urdf/so-100/meshes/";
-
-const ARM_MATERIAL_PROPS = {
-  color: "#b0b8d0",
-  metalness: 0.5,
-  roughness: 0.35,
-};
-
-function STLMesh({ url, material }: { url: string; material?: THREE.MeshStandardMaterialParameters }) {
-  const geometry = useLoader(STLLoader, url);
-  const mat = useMemo(() => material ?? ARM_MATERIAL_PROPS, [material]);
-  return (
-    <mesh geometry={geometry} castShadow receiveShadow>
-      <meshStandardMaterial {...mat} />
-    </mesh>
-  );
-}
-
-function useLerpedAngles(target: number[]) {
-  const current = useRef([0, 0, 0, 0, 0, 0]);
-  useFrame(() => {
-    for (let i = 0; i < 6; i++) {
-      const t = target[i] ?? 0;
-      current.current[i] += (t - current.current[i]) * LERP_FACTOR;
-    }
-  });
-  return current;
-}
-
-function SO100Arm({ jointAngles }: { jointAngles: number[] }) {
-  const targets = useMemo(() => {
-    return jointAngles.length >= 6 ? jointAngles : [0, 0, 0, 0, 0, 0];
-  }, [jointAngles]);
-  const lerpRef = useLerpedAngles(targets);
-  const a = lerpRef.current;
-
-  // URDF joint origins and axes encoded directly from the URDF
-  // Joint: Rotation — origin xyz="0 -0.0452 0.0165" rpy="1.5708 0 0", axis=[0,1,0]
-  // Joint: Pitch — origin xyz="0 0.1025 0.0306" rpy="0 0 0", axis=[1,0,0]
-  // Joint: Elbow — origin xyz="0 0.11257 0.028" rpy="0 0 0", axis=[1,0,0]
-  // Joint: Wrist_Pitch — origin xyz="0 0.0052 0.1349" rpy="-1.6 0 0", axis=[1,0,0]
-  // Joint: Wrist_Roll — origin xyz="0 -0.0601 0" rpy="0 -3.14 0", axis=[0,1,0]
-  // Joint: Jaw — origin xyz="-0.0202 -0.0244 0" rpy="3.1416 0 3.35", axis=[0,0,1]
-
-  const rotEuler = (r: number, p: number, y: number) => new THREE.Euler(r, p, y, "XYZ");
-
-  return (
-    <group rotation={[-Math.PI / 2, 0, 0]}>
-      {/* Base link */}
-      <STLMesh url={`${MESH_BASE}Base.STL`} />
-
-      {/* Rotation joint */}
-      <group position={[0, -0.0452, 0.0165]} rotation={rotEuler(1.5708, 0, 0)}>
-        <group rotation={[0, a[0], 0]}>
-          <STLMesh url={`${MESH_BASE}Rotation_Pitch.STL`} />
-
-          {/* Pitch joint */}
-          <group position={[0, 0.1025, 0.0306]}>
-            <group rotation={[a[1], 0, 0]}>
-              <STLMesh url={`${MESH_BASE}Upper_Arm.STL`} />
-
-              {/* Elbow joint */}
-              <group position={[0, 0.11257, 0.028]}>
-                <group rotation={[a[2], 0, 0]}>
-                  <STLMesh url={`${MESH_BASE}Lower_Arm.STL`} />
-
-                  {/* Wrist Pitch joint */}
-                  <group position={[0, 0.0052, 0.1349]} rotation={rotEuler(-1.6, 0, 0)}>
-                    <group rotation={[a[3], 0, 0]}>
-                      <STLMesh url={`${MESH_BASE}Wrist_Pitch_Roll.STL`} />
-
-                      {/* Wrist Roll joint */}
-                      <group position={[0, -0.0601, 0]} rotation={rotEuler(0, -3.14, 0)}>
-                        <group rotation={[0, a[4], 0]}>
-                          <STLMesh url={`${MESH_BASE}Fixed_Jaw.STL`} />
-
-                          {/* Jaw joint */}
-                          <group position={[-0.0202, -0.0244, 0]} rotation={rotEuler(3.1416, 0, 3.35)}>
-                            <group rotation={[0, 0, a[5]]}>
-                              <STLMesh url={`${MESH_BASE}Moving%20Jaw.STL`} />
-                            </group>
-                          </group>
-                        </group>
-                      </group>
-                    </group>
-                  </group>
-                </group>
-              </group>
-            </group>
-          </group>
-        </group>
-      </group>
-    </group>
-  );
-}
 
 function LoadingFallback() {
   return (
@@ -124,7 +24,7 @@ function Scene({ jointAngles }: { jointAngles: number[] }) {
       <directionalLight position={[-1, 2, -1]} intensity={0.3} />
       <pointLight position={[0, 0.3, 0.1]} intensity={0.15} color="#818cf8" />
       <Suspense fallback={<LoadingFallback />}>
-        <SO100Arm jointAngles={jointAngles} />
+        <SO100ArmModel jointAngles={jointAngles} />
       </Suspense>
       <Grid
         args={[2, 2]}
@@ -162,7 +62,7 @@ function JointReadout({ angles }: { angles: number[] }) {
           />
           <span className="text-muted-foreground w-20">{name}</span>
           <span className="font-mono text-foreground">
-            {angles[i] !== undefined ? `${(angles[i] * 180 / Math.PI).toFixed(1)}°` : "--"}
+            {angles[i] !== undefined ? `${((angles[i] * 180) / Math.PI).toFixed(1)}°` : "--"}
           </span>
         </div>
       ))}
@@ -177,11 +77,11 @@ export function RobotVisualizer({ className }: { className?: string }) {
 
   const pollJoints = useCallback(async () => {
     try {
-      const res = await fetchWithBaseUrl(
-        "/joints/read",
-        "POST",
-        { unit: "rad", joints_ids: null, source: "robot" },
-      );
+      const res = await fetchWithBaseUrl("/joints/read", "POST", {
+        unit: "rad",
+        joints_ids: null,
+        source: "robot",
+      });
       if (res && res.angles && Array.isArray(res.angles)) {
         setJointAngles(res.angles.map((a: number | null) => a ?? 0));
         setConnected(true);

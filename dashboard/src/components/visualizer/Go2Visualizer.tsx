@@ -1,3 +1,4 @@
+import { SO100OnGo2Mount } from "@/components/visualizer/SO100ArmModel";
 import { OrbitControls, Grid } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Suspense, useEffect, useRef } from "react";
@@ -11,7 +12,13 @@ type URDFRobot = THREE.Object3D & {
   joints: Record<string, { setJointValue: (value: number) => void }>;
 };
 
-function Go2Model({ joints }: { joints: Record<string, number> }) {
+function Go2Model({
+  joints,
+  armJointAngles,
+}: {
+  joints: Record<string, number>;
+  armJointAngles: number[];
+}) {
   const rootRef = useRef<THREE.Group>(null);
   const robotRef = useRef<URDFRobot | null>(null);
   const targetRef = useRef(joints);
@@ -33,9 +40,7 @@ function Go2Model({ joints }: { joints: Record<string, number> }) {
       const meshPath = markerIndex >= 0 ? path.slice(markerIndex) : path;
       colladaLoader.load(
         meshPath,
-        (collada) => {
-          onComplete(collada?.scene ?? new THREE.Group());
-        },
+        (collada) => onComplete(collada?.scene ?? new THREE.Group()),
         undefined,
         () => onComplete(new THREE.Group()),
       );
@@ -52,9 +57,7 @@ function Go2Model({ joints }: { joints: Record<string, number> }) {
         robotRef.current = robot as URDFRobot;
       },
       undefined,
-      (err) => {
-        console.error("Failed to load Go2 URDF", err);
-      },
+      (err) => console.error("Failed to load Go2 URDF", err),
     );
 
     return () => {
@@ -75,14 +78,20 @@ function Go2Model({ joints }: { joints: Record<string, number> }) {
     }
   });
 
-  return <group ref={rootRef} />;
+  return (
+    <group ref={rootRef}>
+      <SO100OnGo2Mount jointAngles={armJointAngles} />
+    </group>
+  );
 }
 
 export function Go2Visualizer({
   joints,
-  height = 360,
+  armJointAngles = [0, 0, 0, 0, 0, 0],
+  height = 420,
 }: {
   joints: Record<string, number>;
+  armJointAngles?: number[];
   height?: number;
 }) {
   return (
@@ -103,7 +112,7 @@ export function Go2Visualizer({
           sectionColor="#475569"
         />
         <Suspense fallback={null}>
-          <Go2Model joints={joints} />
+          <Go2Model joints={joints} armJointAngles={armJointAngles} />
         </Suspense>
         <OrbitControls makeDefault target={[0, 0.25, 0]} />
       </Canvas>
