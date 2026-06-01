@@ -97,7 +97,7 @@ export function SO100ArmModel({ jointAngles }: { jointAngles: number[] }) {
  */
 export function SO100OnGo2Mount({
   jointAngles,
-  position = [0.19, 0.45, 0.02],
+  position = [0.19, 0.43, 0.02],
   // Physical mount: vertical base on the Go2 back, arm yawed forward over the head.
   // The extra Y quarter-turn aligns the base plate with the real mount.
   rotation = [Math.PI / 2, Math.PI / 2, -Math.PI / 2],
