@@ -18,7 +18,7 @@ else
 fi
 
 echo "Rewriting mesh paths for static hosting…"
-sed -i 's|package://go2_description/dae/|/urdf/go2_description/dae/|g' \
+sed -i 's|package://go2_description/dae/|../dae/|g; s|/urdf/go2_description/dae/|../dae/|g' \
   "${DEST}/urdf/go2_description.urdf"
 
 echo "Done: ${DEST}"
