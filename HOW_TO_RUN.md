@@ -184,7 +184,48 @@ The dog follower API runs:
 /opt/irl/.venv/bin/python /opt/irl/src/scripts/minimal_so100_follower_server.py --host 0.0.0.0 --port 8020
 ```
 
-The Demo page can start it over SSH. If you update `scripts/minimal_so100_follower_server.py`, copy the script to:
+The Demo page can start it over SSH. The easiest way to install or update the robot-side API is to build the follower tarball on the host:
+
+```bash
+./scripts/build_go2_follower_tar.sh
+```
+
+This creates:
+
+```text
+robot_install/go2_follower_server.tar.gz
+```
+
+Copy and install it on the Go2:
+
+```bash
+scp robot_install/go2_follower_server.tar.gz unitree@10.105.9.173:/tmp/
+ssh unitree@10.105.9.173
+sudo mkdir -p /opt/irl
+sudo tar -xzf /tmp/go2_follower_server.tar.gz -C /opt/irl
+bash /opt/irl/go2_follower_server/install_go2_follower.sh
+```
+
+The installer copies the lightweight follower API to `/opt/irl/src`, installs the Python packages into `/opt/irl/.venv`, and creates:
+
+```text
+~/start_irl_follower_server.sh
+```
+
+Start and verify it on the robot:
+
+```bash
+~/start_irl_follower_server.sh
+curl http://127.0.0.1:8020/status
+```
+
+If the robot cannot reach PyPI during install, use the existing offline/venv bundle scripts instead:
+
+```bash
+./scripts/build_robot_venv_bundle.sh
+```
+
+If you only update `scripts/minimal_so100_follower_server.py`, rebuild/reinstall the tarball or copy the script to:
 
 ```text
 /opt/irl/src/scripts/minimal_so100_follower_server.py

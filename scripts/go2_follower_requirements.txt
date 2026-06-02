@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+msgpack
+numpy
+pydantic
+pyserial
+scservo-sdk
+tqdm
+loguru

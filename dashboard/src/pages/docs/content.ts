@@ -254,6 +254,45 @@ The **Demo** page is for the Go2-mounted SO-100 setup:
 
 The demo uses **relative start**, so the follower does not snap to calibration zero. It mirrors leader deltas from the current follower pose.
 
+## Install the Robot Tarball
+
+Build the robot-side follower package on the host:
+
+\`\`\`bash
+./scripts/build_go2_follower_tar.sh
+\`\`\`
+
+This creates:
+
+\`\`\`text
+robot_install/go2_follower_server.tar.gz
+\`\`\`
+
+Copy and install it on the Go2:
+
+\`\`\`bash
+scp robot_install/go2_follower_server.tar.gz unitree@10.105.9.173:/tmp/
+ssh unitree@10.105.9.173
+sudo mkdir -p /opt/irl
+sudo tar -xzf /tmp/go2_follower_server.tar.gz -C /opt/irl
+bash /opt/irl/go2_follower_server/install_go2_follower.sh
+\`\`\`
+
+The installer copies the lightweight follower API to \`/opt/irl/src\`, installs dependencies into \`/opt/irl/.venv\`, and creates:
+
+\`\`\`text
+~/start_irl_follower_server.sh
+\`\`\`
+
+Start and verify it on the robot:
+
+\`\`\`bash
+~/start_irl_follower_server.sh
+curl http://127.0.0.1:8020/status
+\`\`\`
+
+The Demo page's **Start dog follower server (SSH)** button uses \`~/start_irl_follower_server.sh\` when it exists.
+
 ## Gripper Behavior
 
 The follower gripper mirrors joint 6 directly during leader-follower teleoperation. This avoids clipping the leader gripper through a simple open/close percentage and keeps the dog gripper closer to the leader gripper pose.
