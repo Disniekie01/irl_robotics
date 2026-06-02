@@ -562,7 +562,10 @@ async def start_dog_server() -> StatusResponse:
         f'if [ -x "$HOME/start_irl_follower_server.sh" ]; then '
         f'nohup "$HOME/start_irl_follower_server.sh" >/tmp/irl_follower.log 2>&1 & sleep 4; '
         f"elif [ -f /opt/irl/src/scripts/minimal_so100_follower_server.py ]; then "
-        f'nohup "$HOME/irl_robotics/irl_robotics/.venv/bin/python" '
+        f'PY="/opt/irl/.venv/bin/python"; '
+        f'if [ ! -x "$PY" ]; then PY="$HOME/irl_robotics/irl_robotics/.venv/bin/python"; fi; '
+        f'if [ ! -x "$PY" ]; then PY="$(command -v python3)"; fi; '
+        f'nohup "$PY" '
         f"/opt/irl/src/scripts/minimal_so100_follower_server.py "
         f"--host 0.0.0.0 --port {port} >/tmp/irl_follower.log 2>&1 & sleep 4; "
         f"fi; "
