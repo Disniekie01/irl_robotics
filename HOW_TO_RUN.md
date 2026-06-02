@@ -141,7 +141,98 @@ source /opt/ros/jazzy/setup.bash && cd so-arm101-ros2-bridge && colcon build
 
 The server auto-detects the workspace next to the irl_robotics package; to use a different path set `export ROS2_BRIDGE_PATH=/path/to/so-arm101-ros2-bridge` before starting.
 
-## 6. Troubleshooting
+## 6. Go2 dog demo workflow
+
+The `DOGUPDATES` demo setup supports a local SO-100 leader arm controlling a dog-mounted SO-100 follower arm, plus Go2 camera/marker localization and Position A/B movement presets.
+
+### Start the host backend
+
+From the repo root:
+
+```bash
+make build_frontend
+cd irl_robotics
+export UV_PROJECT_ENVIRONMENT="$HOME/.cache/irl-host-venv"
+uv run --python 3.10 irlrobotics run --simulation=headless --port 8020 --no-telemetry
+```
+
+Open the dashboard at:
+
+```text
+http://<host-ip>:8020/demo
+```
+
+### Demo page setup
+
+1. Open **Demo** in the sidebar.
+2. Save dog SSH credentials:
+   - Dog IP, for example `10.105.9.173`
+   - SSH user, for example `unitree`
+   - Follower API port, usually `8020`
+3. Click **Start dog follower server (SSH)**.
+4. Click **Connect remote follower**.
+5. Connect the Go2 from the dashboard robot connection flow.
+6. Click **Start full demo**.
+
+The leader-follower loop uses relative start, so the dog-mounted follower does not jump to calibration zero when teleop starts.
+
+### Dog follower server
+
+The dog follower API runs:
+
+```text
+/opt/irl/.venv/bin/python /opt/irl/src/scripts/minimal_so100_follower_server.py --host 0.0.0.0 --port 8020
+```
+
+The Demo page can start it over SSH. If you update `scripts/minimal_so100_follower_server.py`, copy the script to:
+
+```text
+/opt/irl/src/scripts/minimal_so100_follower_server.py
+```
+
+Then restart the follower API from the Demo page.
+
+### Go2 camera feed and marker localization
+
+The Demo page shows the Go2 WebRTC camera feed through:
+
+```text
+/demo/go2-video
+```
+
+Marker detection uses OpenCV ArUco dictionary **4x4_50** through:
+
+```text
+/demo/go2-marker-detect
+```
+
+Configure markers in **Admin > GO2 setup**:
+
+| Setting | Description |
+|---------|-------------|
+| Enable marker localization | Turns on marker-based setup for Go2 presets |
+| Camera ID | Local fallback camera ID; Go2 video is used on the Demo page |
+| Marker size (m) | Measured printed marker side length |
+| Position A marker ID | Default `10` |
+| Position B marker ID | Default `11` |
+| X/Y/Yaw | Stored target pose metadata for each marker |
+
+Print/place ArUco markers with matching IDs. The Demo camera panel lists detected marker IDs, pixel centers, estimated distance, and yaw.
+
+### Position presets
+
+| Button | Behavior |
+|--------|----------|
+| Position A | Drives forward about 2 m using Go2 feedback |
+| Position B | Turns about 180 degrees, drives forward about 2 m, then turns back |
+
+These presets use Go2 position/yaw feedback. If feedback is unavailable, the backend refuses to run the preset instead of moving blind.
+
+### After a backend restart
+
+Reconnect Go2 in the dashboard after restarting the backend. The Go2 WebRTC camera stream and marker detection are attached to the live Go2 connection.
+
+## 7. Troubleshooting
 
 | Issue | What to do |
 |-------|------------|
@@ -149,8 +240,11 @@ The server auto-detects the workspace next to the irl_robotics package; to use a
 | `Failed to spawn: irlrobotics` | Run from inside the `irl_robotics` package dir: `cd irl_robotics && uv run irlrobotics run ...` (from repo root: `irl_robotics` is the inner package that has `pyproject.toml`). |
 | Serial/robot not found | Check USB/serial connections and that your user is in the `dialout` group: `sudo usermod -aG dialout $USER` (then log out and back in). |
 | Isaac Sim relays not starting | On the machine running Phospho, install ROS2 (Jazzy or Humble) and the matching `topic-tools` package (`ros-jazzy-topic-tools` or `ros-humble-topic-tools`). Relays do not require the bridge workspace. If Isaac is on another host, set the same `ROS_DOMAIN_ID` on both. |
+| Demo camera is blank | Reconnect Go2 after backend restart, then hard refresh the Demo page. |
+| Marker detector shows no markers | Check that the printed ArUco IDs match Admin > GO2 setup and that marker size is correct. |
+| Position B spins too far | Rebuild/restart the latest branch; the safer turn controller accumulates yaw deltas and uses a small turn command. |
 
-## 7. One-liner from repo root
+## 8. One-liner from repo root
 
 Build frontend and run on port 8020 with no telemetry:
 

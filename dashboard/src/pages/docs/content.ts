@@ -31,6 +31,7 @@ IRL Robotics is a unified platform for controlling, recording, training, and dep
 - **AI training** — train SmolVLA and gr00t models locally on your GPU
 - **3D visualizer** — real-time URDF-based rendering of the SO-100 arm
 - **Macro recorder** — record and replay movement sequences
+- **Go2 dog demo** — local SO-100 leader controls a dog-mounted SO-100 follower with Go2 camera, marker setup, and position presets
 - **Skill graph editor** — visual node-based workflow builder with conditions, loops, parallel execution, and live progress
 - **Simulation mode** — test without hardware using a simulated robot
 - **ROS2 bridge** — connect to Isaac Sim with per-joint offset sliders
@@ -213,6 +214,103 @@ The leader arm's joint positions are read at high frequency and mirrored to the 
 - Calibrate both arms first for best accuracy
 - Leader arm control is the recommended method for recording training datasets
 - The recording system automatically captures both leader and follower joint positions
+`,
+      },
+      {
+        id: "go2-dog-demo",
+        title: "Go2 Dog Demo",
+        content: `
+# Go2 Dog Demo
+
+The **Demo** page is for the Go2-mounted SO-100 setup:
+
+- Local SO-100 leader arm on the host machine
+- Remote SO-100 follower arm on the Go2/dog computer
+- Go2 WebRTC connection for leg state and camera feed
+- Position presets for moving the dog
+- Optional ArUco marker setup for localization
+
+## Hardware Layout
+
+| Device | Role |
+|--------|------|
+| Local SO-100 | Leader arm, connected over USB to the dashboard host |
+| Dog-mounted SO-100 | Follower arm, controlled through the dog follower API |
+| Unitree Go2 | Mobile base and camera source |
+
+## Starting the Demo
+
+1. Start the IRL Robotics backend on the host.
+2. Open **Demo** in the sidebar.
+3. Enter the dog SSH details:
+   - Dog IP, for example \`10.105.9.173\`
+   - SSH user, for example \`unitree\`
+   - Follower API port, usually \`8020\`
+4. Click **Save credentials**.
+5. Click **Start dog follower server (SSH)**.
+6. Click **Connect remote follower**.
+7. Connect the Go2 from the normal robot connection flow.
+8. Click **Start full demo**.
+
+The demo uses **relative start**, so the follower does not snap to calibration zero. It mirrors leader deltas from the current follower pose.
+
+## Gripper Behavior
+
+The follower gripper mirrors joint 6 directly during leader-follower teleoperation. This avoids clipping the leader gripper through a simple open/close percentage and keeps the dog gripper closer to the leader gripper pose.
+
+## Go2 Camera Feed
+
+The Demo page shows the Go2 WebRTC camera feed instead of the old 3D Go2 view. If the camera panel is blank:
+
+1. Reconnect the Go2 after backend restart.
+2. Confirm the Go2 is connected in the Demo status cards.
+3. Refresh the Demo page.
+
+## Position Presets
+
+The **Dog position presets** card has:
+
+| Button | Behavior |
+|--------|----------|
+| Position A | Drive forward about 2 m using Go2 position feedback |
+| Position B | Turn about 180 degrees, drive forward about 2 m, then turn back |
+
+These presets use Go2 state feedback when available. If feedback is unavailable, the endpoint refuses to run instead of moving blind.
+
+## Marker Localization Setup
+
+Marker localization uses OpenCV ArUco markers with dictionary **4x4_50**.
+
+1. Go to **Admin > GO2 setup**.
+2. Enable marker localization.
+3. Set **Marker size (m)** to the measured side length of your printed marker.
+4. Set Position A and Position B marker IDs.
+5. Print/place matching ArUco markers where the dog should localize.
+6. Return to **Demo** and watch the camera panel's marker status.
+
+Default marker IDs:
+
+| Target | Default ID |
+|--------|------------|
+| Position A | \`10\` |
+| Position B | \`11\` |
+
+The marker readout shows marker ID, pixel center, estimated distance, and yaw when pose estimation is available.
+
+## Useful Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| \`/demo/status\` | GET | Demo readiness and connection state |
+| \`/demo/start-dog-server\` | POST | Start follower API on the dog via SSH |
+| \`/demo/connect-remote-follower\` | POST | Register dog follower as a remote robot |
+| \`/demo/start\` | POST | Start leader-follower demo |
+| \`/demo/stop\` | POST | Stop leader-follower demo |
+| \`/demo/go2-video\` | GET | Go2 WebRTC camera MJPEG stream |
+| \`/demo/go2-marker-detect\` | GET | Detect configured ArUco markers from Go2 video |
+| \`/demo/position-a\` | POST | Run Position A preset |
+| \`/demo/position-b\` | POST | Run Position B preset |
+| \`/admin/go2-setup\` | GET/POST | Read or save marker localization setup |
 `,
       },
       {
