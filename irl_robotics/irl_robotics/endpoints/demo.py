@@ -33,7 +33,7 @@ router = APIRouter(prefix="/demo", tags=["demo"])
 
 ElementState = Literal["ok", "warn", "error", "pending", "unknown"]
 
-DEFAULT_DOG_IP = "10.105.9.173"
+DEFAULT_DOG_IP = "192.168.8.204"
 DEFAULT_SSH_USER = "unitree"
 DEFAULT_DOG_PORT = 8020
 

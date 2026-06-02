@@ -100,7 +100,7 @@ function StatusIcon({ state }: { state: ElementState }) {
 
 export function DemoPage() {
   const [busy, setBusy] = useState<string | null>(null);
-  const [sshHost, setSshHost] = useState("10.105.9.173");
+  const [sshHost, setSshHost] = useState("192.168.8.204");
   const [sshUser, setSshUser] = useState("unitree");
   const [sshPassword, setSshPassword] = useState("");
   const [dogPort, setDogPort] = useState("8020");
@@ -169,7 +169,7 @@ export function DemoPage() {
 
   useEffect(() => {
     if (!demoStatus?.config) return;
-    setSshHost(demoStatus.config.ssh_host || "10.105.9.173");
+    setSshHost(demoStatus.config.ssh_host || "192.168.8.204");
     setSshUser(demoStatus.config.ssh_user || "unitree");
     setDogPort(String(demoStatus.config.dog_api_port ?? 8020));
     if (demoStatus.config.preferred_leader_serial) {
@@ -366,7 +366,7 @@ export function DemoPage() {
                   id="ssh-host"
                   value={sshHost}
                   onChange={(e) => setSshHost(e.target.value)}
-                  placeholder="10.105.9.173"
+                  placeholder="192.168.8.204"
                 />
               </div>
               <div className="space-y-2">
