@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -11,12 +12,14 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 from serial.tools import list_ports
 
 from irl_robotics.endpoints.control import signal_leader_follower, start_leader_follower_loop
+from irl_robotics.endpoints.pages import _load_go2_setup
 from irl_robotics.hardware.base import BaseManipulator
 from irl_robotics.hardware.go2 import UnitreeGo2
 from irl_robotics.hardware.remote_robot import RemoteRobot
@@ -100,9 +103,25 @@ class DemoGo2JointsResponse(BaseModel):
     message: str = ""
 
 
+class DemoGo2Marker(BaseModel):
+    marker_id: int
+    center_x_px: float
+    center_y_px: float
+    distance_m: Optional[float] = None
+    yaw_deg: Optional[float] = None
+
+
+class DemoGo2MarkerDetectionResponse(BaseModel):
+    available: bool = False
+    enabled: bool = False
+    message: str = ""
+    markers: list[DemoGo2Marker] = Field(default_factory=list)
+
+
 class _DemoState:
     remote_follower_robot_id: Optional[int] = None
     leader_robot_id: Optional[int] = None
+    position_preset_running: bool = False
 
 
 def _config_path() -> Path:
@@ -461,6 +480,378 @@ async def demo_go2_joints(
         joints={},
         message="Connected; waiting for lowstate motor data",
     )
+
+
+@router.get("/go2-video")
+async def demo_go2_video(
+    request: Request,
+    width: int = 960,
+    quality: int = 75,
+    rcm: RobotConnectionManager = Depends(get_rcm),
+) -> StreamingResponse:
+    _, go2 = await _find_connected_go2(rcm)
+    if go2 is None:
+        raise HTTPException(status_code=404, detail="No connected Unitree Go2")
+
+    async def generate() -> Any:
+        try:
+            import cv2
+        except Exception:
+            return
+
+        while not await request.is_disconnected():
+            frame = go2.get_video_frame()
+            if frame is None:
+                await asyncio.sleep(0.05)
+                continue
+            if width > 0 and frame.shape[1] != width:
+                height = int(frame.shape[0] * (width / frame.shape[1]))
+                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+            bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            ok, jpeg = cv2.imencode(
+                ".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, int(max(1, min(100, quality)))]
+            )
+            if ok:
+                yield (
+                    b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                    + jpeg.tobytes()
+                    + b"\r\n"
+                )
+            await asyncio.sleep(1 / 30)
+
+    return StreamingResponse(
+        generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+def _detect_aruco_markers_from_frame(
+    frame: Any, marker_size_m: float
+) -> tuple[bool, str, list[DemoGo2Marker]]:
+    try:
+        import cv2
+        import numpy as np
+    except Exception as e:
+        return False, f"OpenCV unavailable: {e}", []
+
+    aruco = getattr(cv2, "aruco", None)
+    if aruco is None:
+        return (
+            False,
+            "cv2.aruco is unavailable. Install opencv-contrib-python for marker detection.",
+            [],
+        )
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    dictionary = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+    parameters = aruco.DetectorParameters()
+    if hasattr(aruco, "ArucoDetector"):
+        detector = aruco.ArucoDetector(dictionary, parameters)
+        corners, ids, _ = detector.detectMarkers(gray)
+    else:
+        corners, ids, _ = aruco.detectMarkers(gray, dictionary, parameters=parameters)
+
+    if ids is None or len(ids) == 0:
+        return True, "No markers detected", []
+
+    height, width = gray.shape[:2]
+    focal = float(width)
+    camera_matrix = np.array(
+        [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
+        dtype=np.float32,
+    )
+    distortion = np.zeros((5, 1), dtype=np.float32)
+    marker_distances: dict[int, float] = {}
+    marker_yaws: dict[int, float] = {}
+    try:
+        rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(
+            corners, marker_size_m, camera_matrix, distortion
+        )
+        for index, marker_id_array in enumerate(ids):
+            marker_id = int(marker_id_array[0])
+            tvec = tvecs[index][0]
+            marker_distances[marker_id] = float(np.linalg.norm(tvec))
+            rotation_matrix, _ = cv2.Rodrigues(rvecs[index][0])
+            marker_yaws[marker_id] = float(
+                np.degrees(np.arctan2(rotation_matrix[1, 0], rotation_matrix[0, 0]))
+            )
+    except Exception as e:
+        logger.warning(f"Go2 marker pose estimate failed: {e}")
+
+    markers = []
+    for marker_id_array, marker_corners in zip(ids, corners):
+        marker_id = int(marker_id_array[0])
+        points = marker_corners[0]
+        center = points.mean(axis=0)
+        markers.append(
+            DemoGo2Marker(
+                marker_id=marker_id,
+                center_x_px=float(center[0]),
+                center_y_px=float(center[1]),
+                distance_m=marker_distances.get(marker_id),
+                yaw_deg=marker_yaws.get(marker_id),
+            )
+        )
+    return True, f"Detected {len(markers)} marker(s)", markers
+
+
+@router.get("/go2-marker-detect", response_model=DemoGo2MarkerDetectionResponse)
+async def demo_go2_marker_detect(
+    rcm: RobotConnectionManager = Depends(get_rcm),
+) -> DemoGo2MarkerDetectionResponse:
+    setup = _load_go2_setup()
+    _, go2 = await _find_connected_go2(rcm)
+    if go2 is None:
+        return DemoGo2MarkerDetectionResponse(
+            available=False,
+            enabled=setup.enabled,
+            message="No connected Unitree Go2",
+        )
+    frame = go2.get_video_frame()
+    if frame is None:
+        return DemoGo2MarkerDetectionResponse(
+            available=False,
+            enabled=setup.enabled,
+            message="Waiting for Go2 video frame",
+        )
+    available, message, markers = _detect_aruco_markers_from_frame(
+        frame, setup.marker_size_m
+    )
+    return DemoGo2MarkerDetectionResponse(
+        available=available,
+        enabled=setup.enabled,
+        message=message,
+        markers=markers,
+    )
+
+
+def _lookup_path(data: Any, path: list[str]) -> Any:
+    current = data
+    for key in path:
+        if isinstance(current, dict):
+            current = current.get(key)
+        elif isinstance(current, (list, tuple)) and key.isdigit():
+            index = int(key)
+            current = current[index] if index < len(current) else None
+        else:
+            current = getattr(current, key, None)
+        if current is None:
+            return None
+    return current
+
+
+def _as_float_list(value: Any) -> Optional[list[float]]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        if all(axis in value for axis in ("x", "y", "z")):
+            return [float(value["x"]), float(value["y"]), float(value["z"])]
+        return None
+    if isinstance(value, (list, tuple)) and len(value) >= 3:
+        return [float(value[0]), float(value[1]), float(value[2])]
+    return None
+
+
+def _go2_position_xy(go2: UnitreeGo2) -> Optional[tuple[float, float]]:
+    state = go2.sportmodstate
+    for path in (
+        ["position"],
+        ["pos"],
+        ["body_position"],
+        ["bodyPosition"],
+        ["odometry", "position"],
+    ):
+        position = _as_float_list(_lookup_path(state, path))
+        if position is not None:
+            return position[0], position[1]
+    return None
+
+
+def _go2_yaw_rad(go2: UnitreeGo2) -> Optional[float]:
+    state = go2.sportmodstate
+    lowstate = go2.lowstate
+    for path in (
+        ["yaw"],
+        ["rpy", "2"],
+        ["imu_state", "rpy"],
+        ["imuState", "rpy"],
+    ):
+        value = _lookup_path(state, path)
+        if isinstance(value, (int, float)):
+            yaw = float(value)
+            return math.radians(yaw) if abs(yaw) > 2 * math.pi else yaw
+        values = _as_float_list(value)
+        if values is not None:
+            yaw = values[2]
+            return math.radians(yaw) if abs(yaw) > 2 * math.pi else yaw
+    for path in (
+        ["imu_state", "rpy"],
+        ["imuState", "rpy"],
+        ["rpy"],
+    ):
+        values = _as_float_list(_lookup_path(lowstate, path))
+        if values is not None:
+            yaw = values[2]
+            return math.radians(yaw) if abs(yaw) > 2 * math.pi else yaw
+    return None
+
+
+def _angle_delta_rad(current: float, start: float) -> float:
+    return math.atan2(math.sin(current - start), math.cos(current - start))
+
+
+async def _run_go2_velocity(
+    go2: UnitreeGo2,
+    *,
+    x: float,
+    y: float,
+    rz: float,
+    duration_s: float,
+    command_period_s: float = 0.12,
+) -> None:
+    steps = max(1, int(duration_s / command_period_s))
+    for _ in range(steps):
+        await go2._move_robot(x=x, y=y, rz=rz)
+        await asyncio.sleep(command_period_s)
+
+
+async def _stop_go2(go2: UnitreeGo2) -> None:
+    await asyncio.sleep(0.12)
+    await go2._move_robot(x=0.0, y=0.0, rz=0.0)
+
+
+async def _drive_go2_distance(
+    go2: UnitreeGo2,
+    *,
+    distance_m: float,
+    speed: float = 0.30,
+    tolerance_m: float = 0.08,
+    timeout_s: float = 25.0,
+) -> float:
+    start = _go2_position_xy(go2)
+    if start is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Go2 position feedback is not available yet; cannot run exact preset.",
+        )
+
+    start_time = asyncio.get_running_loop().time()
+    travelled = 0.0
+    try:
+        while travelled < max(distance_m - tolerance_m, 0.0):
+            if asyncio.get_running_loop().time() - start_time > timeout_s:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"Timed out driving Go2 distance; measured {travelled:.2f} m",
+                )
+            await go2._move_robot(x=speed, y=0.0, rz=0.0)
+            await asyncio.sleep(0.12)
+            current = _go2_position_xy(go2)
+            if current is not None:
+                travelled = math.hypot(current[0] - start[0], current[1] - start[1])
+    finally:
+        await _stop_go2(go2)
+    return travelled
+
+
+async def _turn_go2_angle(
+    go2: UnitreeGo2,
+    *,
+    angle_deg: float,
+    turn_command: float = 0.22,
+    tolerance_deg: float = 8.0,
+    timeout_s: float = 14.0,
+) -> float:
+    previous = _go2_yaw_rad(go2)
+    if previous is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Go2 yaw feedback is not available yet; cannot run exact preset.",
+        )
+
+    target = math.radians(abs(angle_deg))
+    tolerance = math.radians(tolerance_deg)
+    command = math.copysign(abs(turn_command), angle_deg)
+    start_time = asyncio.get_running_loop().time()
+    turned = 0.0
+    try:
+        while turned < max(target - tolerance, 0.0):
+            if asyncio.get_running_loop().time() - start_time > timeout_s:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"Timed out turning Go2; measured {math.degrees(turned):.1f} deg",
+                )
+            await go2._move_robot(x=0.0, y=0.0, rz=command)
+            await asyncio.sleep(0.12)
+            current = _go2_yaw_rad(go2)
+            if current is not None:
+                delta = _angle_delta_rad(current, previous)
+                if math.copysign(1.0, delta or command) == math.copysign(1.0, command):
+                    turned += abs(delta)
+                previous = current
+    finally:
+        await _stop_go2(go2)
+    return math.degrees(turned)
+
+
+async def _get_position_preset_go2(
+    rcm: RobotConnectionManager,
+) -> tuple[int, UnitreeGo2]:
+    if _DemoState.position_preset_running:
+        raise HTTPException(status_code=409, detail="Position preset already running")
+
+    robot_id, go2 = await _find_connected_go2(rcm)
+    if go2 is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No connected Unitree Go2. Add one from Robots and connect via WebRTC.",
+        )
+    return robot_id, go2
+
+
+@router.post("/position-a", response_model=StatusResponse)
+async def demo_position_a(
+    rcm: RobotConnectionManager = Depends(get_rcm),
+) -> StatusResponse:
+    """Drive the connected Go2 slowly forward for roughly 2 meters."""
+    robot_id, go2 = await _get_position_preset_go2(rcm)
+
+    _DemoState.position_preset_running = True
+    try:
+        travelled = await _drive_go2_distance(go2, distance_m=2.0)
+        return StatusResponse(
+            message=(
+                f"Position A complete on Go2 robot_id={robot_id}: "
+                f"measured forward {travelled:.2f} m"
+            )
+        )
+    finally:
+        _DemoState.position_preset_running = False
+
+
+@router.post("/position-b", response_model=StatusResponse)
+async def demo_position_b(
+    rcm: RobotConnectionManager = Depends(get_rcm),
+) -> StatusResponse:
+    """Turn around, move forward roughly 2 meters, then turn back."""
+    robot_id, go2 = await _get_position_preset_go2(rcm)
+
+    _DemoState.position_preset_running = True
+    try:
+        first_turn = await _turn_go2_angle(go2, angle_deg=180.0)
+        await asyncio.sleep(0.4)
+        travelled = await _drive_go2_distance(go2, distance_m=2.0)
+        await asyncio.sleep(0.4)
+        second_turn = await _turn_go2_angle(go2, angle_deg=-180.0)
+        return StatusResponse(
+            message=(
+                f"Position B complete on Go2 robot_id={robot_id}: "
+                f"turn {first_turn:.0f} deg, forward {travelled:.2f} m, "
+                f"turn back {second_turn:.0f} deg"
+            )
+        )
+    finally:
+        _DemoState.position_preset_running = False
 
 
 @router.get("/status", response_model=DemoStatusResponse)

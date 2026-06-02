@@ -134,6 +134,21 @@ export type AdminSettings = {
   hf_private_mode: boolean;
 };
 
+export type Go2MarkerTarget = {
+  marker_id: number;
+  x_m: number;
+  y_m: number;
+  yaw_deg: number;
+};
+
+export type Go2SetupConfig = {
+  enabled: boolean;
+  camera_id: number;
+  marker_size_m: number;
+  position_a: Go2MarkerTarget;
+  position_b: Go2MarkerTarget;
+};
+
 export type AIStatusResponse = {
   id?: string;
   status: "waiting" | "running" | "stopped" | "paused";

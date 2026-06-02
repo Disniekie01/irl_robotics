@@ -69,6 +69,7 @@ class UnitreeGo2(BaseMobileRobot):
         # Status variables about the robot
         self.lowstate: Optional[dict[str, Any]] = None
         self.sportmodstate: Optional[dict[str, Any]] = None
+        self.latest_video_frame: Optional[np.ndarray] = None
         self.last_movement = 0.0
 
         # Track movement instructions
@@ -223,6 +224,9 @@ class UnitreeGo2(BaseMobileRobot):
                 RTC_TOPIC["LF_SPORT_MOD_STATE"], sportmodestatus_callback
             )
 
+            self.conn.video.add_track_callback(self._video_track_callback)
+            self.conn.video.switchVideoChannel(True)
+
             # await self.conn.datachannel.pub_sub.publish_request_new(
             #     RTC_TOPIC["MOTION_SWITCHER"],
             #     {"api_id": 1002, "parameter": {"name": "ai"}},
@@ -233,6 +237,21 @@ class UnitreeGo2(BaseMobileRobot):
         except Exception as e:
             # Clean up connection on failure
             raise e
+
+    async def _video_track_callback(self, track: Any) -> None:
+        """Receive Go2 WebRTC video frames and keep the latest RGB frame."""
+        while self.is_connected:
+            try:
+                frame = await track.recv()
+                self.latest_video_frame = frame.to_ndarray(format="rgb24")
+            except Exception as e:
+                logger.warning(f"Go2 video frame receive stopped: {e}")
+                return
+
+    def get_video_frame(self) -> Optional[np.ndarray]:
+        if self.latest_video_frame is None:
+            return None
+        return self.latest_video_frame.copy()
 
     def disconnect(self) -> None:
         """

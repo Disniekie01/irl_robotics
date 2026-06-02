@@ -28,7 +28,12 @@ import {
 } from "@/components/ui/tooltip";
 import { useAuth } from "@/context/AuthContext";
 import { fetchWithBaseUrl, fetcher } from "@/lib/utils";
-import { AdminSettings, AdminTokenSettings } from "@/types";
+import {
+  AdminSettings,
+  AdminTokenSettings,
+  Go2MarkerTarget,
+  Go2SetupConfig,
+} from "@/types";
 import {
   Camera,
   CircleCheck,
@@ -37,8 +42,10 @@ import {
   Key,
   Lock,
   Play,
+  MapPin,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import useSWR from "swr";
 
 export function AdminPage() {
@@ -57,6 +64,12 @@ export function AdminPage() {
   const { data: adminSettingsTokens } = useSWR<AdminTokenSettings>(
     ["/admin/settings/tokens"],
     ([url]) => fetcher(url, "POST"),
+  );
+
+  const { data: go2Setup, mutate: mutateGo2Setup } = useSWR<Go2SetupConfig>(
+    "/admin/go2-setup",
+    fetcher,
+    { revalidateOnFocus: false, revalidateOnReconnect: false },
   );
 
   // Validation
@@ -121,6 +134,39 @@ export function AdminPage() {
 
     setValidationErrors((prev) => ({ ...prev, [key]: error }));
     mutate({ ...adminSettings, [key]: finalValue }, false);
+  };
+
+  const saveGo2Setup = async (next: Go2SetupConfig) => {
+    mutateGo2Setup(next, false);
+    const saved = await fetchWithBaseUrl("/admin/go2-setup", "POST", next);
+    if (saved) {
+      mutateGo2Setup(saved, false);
+    }
+  };
+
+  const handleGo2SetupChange = <K extends keyof Go2SetupConfig>(
+    key: K,
+    value: Go2SetupConfig[K],
+  ) => {
+    if (!go2Setup) return;
+    saveGo2Setup({ ...go2Setup, [key]: value }).catch(() =>
+      toast.error("Failed to save GO2 setup"),
+    );
+  };
+
+  const handleGo2TargetChange = (
+    targetKey: "position_a" | "position_b",
+    field: keyof Go2MarkerTarget,
+    value: number,
+  ) => {
+    if (!go2Setup) return;
+    saveGo2Setup({
+      ...go2Setup,
+      [targetKey]: {
+        ...go2Setup[targetKey],
+        [field]: value,
+      },
+    }).catch(() => toast.error("Failed to save GO2 setup"));
   };
 
   if (!adminSettings) return <LoadingPage />;
@@ -361,6 +407,134 @@ export function AdminPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* GO2 Setup */}
+        {go2Setup && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <MapPin className="h-5 w-5 text-primary" /> GO2 setup
+              </CardTitle>
+              <CardDescription>
+                Configure marker localization targets for Position A/B.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="go2-marker-enabled"
+                  checked={go2Setup.enabled}
+                  onCheckedChange={(checked) =>
+                    handleGo2SetupChange("enabled", checked as boolean)
+                  }
+                />
+                <Label htmlFor="go2-marker-enabled">
+                  Enable marker localization for GO2 presets
+                </Label>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="go2-camera-id">Camera ID</Label>
+                  <Input
+                    id="go2-camera-id"
+                    type="number"
+                    value={go2Setup.camera_id}
+                    onChange={(e) =>
+                      handleGo2SetupChange("camera_id", Number(e.target.value))
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="go2-marker-size">Marker size (m)</Label>
+                  <Input
+                    id="go2-marker-size"
+                    type="number"
+                    step="0.01"
+                    value={go2Setup.marker_size_m}
+                    onChange={(e) =>
+                      handleGo2SetupChange("marker_size_m", Number(e.target.value))
+                    }
+                  />
+                </div>
+              </div>
+
+              {(["position_a", "position_b"] as const).map((targetKey) => {
+                const target = go2Setup[targetKey];
+                const label = targetKey === "position_a" ? "Position A" : "Position B";
+                return (
+                  <div
+                    key={targetKey}
+                    className="rounded-lg border border-border p-3 space-y-3"
+                  >
+                    <div className="font-medium text-sm">{label} marker target</div>
+                    <div className="grid gap-2 sm:grid-cols-4">
+                      <div className="space-y-1">
+                        <Label>Marker ID</Label>
+                        <Input
+                          type="number"
+                          value={target.marker_id}
+                          onChange={(e) =>
+                            handleGo2TargetChange(
+                              targetKey,
+                              "marker_id",
+                              Number(e.target.value),
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>X (m)</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={target.x_m}
+                          onChange={(e) =>
+                            handleGo2TargetChange(
+                              targetKey,
+                              "x_m",
+                              Number(e.target.value),
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Y (m)</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={target.y_m}
+                          onChange={(e) =>
+                            handleGo2TargetChange(
+                              targetKey,
+                              "y_m",
+                              Number(e.target.value),
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Yaw (deg)</Label>
+                        <Input
+                          type="number"
+                          step="1"
+                          value={target.yaw_deg}
+                          onChange={(e) =>
+                            handleGo2TargetChange(
+                              targetKey,
+                              "yaw_deg",
+                              Number(e.target.value),
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   );

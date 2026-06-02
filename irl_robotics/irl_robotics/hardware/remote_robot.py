@@ -73,7 +73,12 @@ class _WebSocketTransport:
                 self._ws = None
                 return self._last_positions
 
-    def write_joints(self, angles: np.ndarray, unit: str = "rad") -> None:
+    def write_joints(
+        self,
+        angles: np.ndarray,
+        unit: str = "rad",
+        joints_ids: Optional[List[int]] = None,
+    ) -> None:
         import msgpack
 
         with self._lock:
@@ -85,6 +90,7 @@ class _WebSocketTransport:
                     "cmd": "write",
                     "angles": angles.tolist(),
                     "unit": unit,
+                    "joints_ids": joints_ids,
                 })
                 self._ws.send(msg)
                 reply = msgpack.unpackb(self._ws.recv(), raw=False)
@@ -253,16 +259,37 @@ class RemoteRobot(BaseRobot):
         Uses WebSocket transport if available, otherwise falls back to HTTP.
         """
 
-        if not enable_gripper:
-            q_target_rad = q_target_rad[:-1]
+        q_target_rad = np.asarray(q_target_rad, dtype=float)
+        joints_ids: Optional[List[int]] = None
+
+        # Match BaseManipulator semantics: arm streaming does not control the
+        # gripper unless explicitly requested. Gripper commands are sent via
+        # control_gripper(), so including joint 6 here can immediately undo
+        # the open/close command on remote followers.
+        if not enable_gripper and 0 <= self.GRIPPER_JOINT_INDEX < len(q_target_rad):
+            command_indices = [
+                idx
+                for idx in range(len(q_target_rad))
+                if idx != self.GRIPPER_JOINT_INDEX
+            ]
+            q_target_rad = q_target_rad[command_indices]
+            joints_ids = [
+                self.SERVO_IDS[idx]
+                for idx in command_indices
+                if idx < len(self.SERVO_IDS)
+            ]
 
         if self._ws_transport is not None and self._ws_transport.is_connected:
-            self._ws_transport.write_joints(q_target_rad)
+            self._ws_transport.write_joints(q_target_rad, joints_ids=joints_ids)
             return
 
         self.client.post(
             "/joints/write",
-            json={"angles": q_target_rad.tolist(), "unit": "rad"},
+            json={
+                "angles": q_target_rad.tolist(),
+                "unit": "rad",
+                "joints_ids": joints_ids,
+            },
             params={"robot_id": self.robot_id},
         )
 
@@ -528,6 +555,8 @@ class RemoteRobot(BaseRobot):
         self,
         unit: Literal["rad", "degrees", "motor_units"] = "rad",
         source: Optional[Literal["sim", "robot"]] = None,
+        joints_ids: Optional[List[int]] = None,
+        **kwargs: Any,
     ) -> np.ndarray:
         """
         Read the current joint positions of the robot.
@@ -542,11 +571,14 @@ class RemoteRobot(BaseRobot):
             and self._ws_transport.is_connected
             and unit == "rad"
         ):
-            return self._ws_transport.read_joints()
+            joints = self._ws_transport.read_joints()
+            if joints_ids is not None:
+                return joints[[self.SERVO_IDS.index(j) for j in joints_ids]]
+            return joints
 
         response = self.client.post(
             "/joints/read",
-            json={"unit": unit, "source": source},
+            json={"unit": unit, "source": source, "joints_ids": joints_ids},
             params={"robot_id": self.robot_id},
         )
         joints = response.json()
@@ -616,9 +648,7 @@ class RemoteRobot(BaseRobot):
         open_position = self.config.servos_calibration_position[-1]
         close_position = self.config.servos_offsets[-1]
         open_command = (
-            self._radians_to_motor_units(
-                radians=radians, servo_id=self.GRIPPER_JOINT_INDEX
-            )
+            self._radians_to_motor_units(radians=radians, servo_id=self.SERVO_IDS[-1])
             - close_position
         ) / (open_position - close_position)
         return np.clip(open_command, 0, 1)

@@ -10,8 +10,8 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Go2Visualizer } from "@/components/visualizer/Go2Visualizer";
 import { fetchWithBaseUrl, fetcher } from "@/lib/utils";
+import { Go2SetupConfig } from "@/types";
 import {
   AlertCircle,
   CheckCircle2,
@@ -57,42 +57,23 @@ interface DemoGo2JointsResponse {
   message: string;
 }
 
-const ARM_MOUNT_STORAGE_KEY = "irl-demo-arm-mount-v1";
-const DEFAULT_ARM_MOUNT_POSITION: [number, number, number] = [0.19, 0.43, 0.02];
-const DEFAULT_ARM_MOUNT_ROTATION: [number, number, number] = [
-  Math.PI / 2,
-  Math.PI / 2,
-  -Math.PI / 2,
-];
-
-function loadArmMount(): {
-  position: [number, number, number];
-  rotation: [number, number, number];
-} {
-  try {
-    const raw = window.localStorage.getItem(ARM_MOUNT_STORAGE_KEY);
-    if (!raw) {
-      return {
-        position: DEFAULT_ARM_MOUNT_POSITION,
-        rotation: DEFAULT_ARM_MOUNT_ROTATION,
-      };
-    }
-    const parsed = JSON.parse(raw);
-    return {
-      position: Array.isArray(parsed.position)
-        ? (parsed.position.slice(0, 3) as [number, number, number])
-        : DEFAULT_ARM_MOUNT_POSITION,
-      rotation: Array.isArray(parsed.rotation)
-        ? (parsed.rotation.slice(0, 3) as [number, number, number])
-        : DEFAULT_ARM_MOUNT_ROTATION,
-    };
-  } catch {
-    return {
-      position: DEFAULT_ARM_MOUNT_POSITION,
-      rotation: DEFAULT_ARM_MOUNT_ROTATION,
-    };
-  }
+interface Go2DetectedMarker {
+  marker_id: number;
+  center_x_px: number;
+  center_y_px: number;
+  distance_m?: number | null;
+  yaw_deg?: number | null;
 }
+
+interface Go2MarkerDetectionResponse {
+  available: boolean;
+  enabled: boolean;
+  camera_id: number;
+  message: string;
+  markers: Go2DetectedMarker[];
+}
+
+const GO2_JOINT_REFRESH_MS = 10;
 
 function stateBadgeVariant(
   state: ElementState,
@@ -125,8 +106,6 @@ export function DemoPage() {
   const [dogPort, setDogPort] = useState("8020");
   const [preferredSerial, setPreferredSerial] = useState("");
   const [leaderRobotId, setLeaderRobotId] = useState<string>("");
-  const [{ position: armMountPosition, rotation: armMountRotation }, setArmMount] =
-    useState(loadArmMount);
   const [lastArmJointAt, setLastArmJointAt] = useState<number | null>(null);
 
   const {
@@ -140,12 +119,24 @@ export function DemoPage() {
   const { data: go2Joints } = useSWR<DemoGo2JointsResponse>(
     ["/demo/go2-joints"],
     fetcher,
-    { refreshInterval: 200 },
+    {
+      dedupingInterval: 0,
+      refreshInterval: GO2_JOINT_REFRESH_MS,
+      revalidateOnFocus: false,
+    },
   );
 
-  const [armJointAngles, setArmJointAngles] = useState<number[]>([
-    0, 0, 0, 0, 0, 0,
-  ]);
+  const { data: go2Setup } = useSWR<Go2SetupConfig>(
+    ["/admin/go2-setup"],
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+
+  const { data: markerDetection } = useSWR<Go2MarkerDetectionResponse>(
+    ["/demo/go2-marker-detect"],
+    fetcher,
+    { refreshInterval: 500, revalidateOnFocus: false },
+  );
 
   const armRobotId =
     demoStatus?.remote_follower_robot_id ??
@@ -162,7 +153,6 @@ export function DemoPage() {
           { unit: "rad", joints_ids: null, source: "robot" },
         );
         if (!cancelled && res?.angles && Array.isArray(res.angles)) {
-          setArmJointAngles(res.angles.map((a: number | null) => a ?? 0));
           setLastArmJointAt(Date.now());
         }
       } catch {
@@ -189,13 +179,6 @@ export function DemoPage() {
       setLeaderRobotId(String(demoStatus.leader_robot_id));
     }
   }, [demoStatus]);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      ARM_MOUNT_STORAGE_KEY,
-      JSON.stringify({ position: armMountPosition, rotation: armMountRotation }),
-    );
-  }, [armMountPosition, armMountRotation]);
 
   const runAction = useCallback(
     async (key: string, fn: () => Promise<void>) => {
@@ -268,6 +251,18 @@ export function DemoPage() {
       if (res) toast.success(res.message || "Demo stopped");
     });
 
+  const runPositionA = () =>
+    runAction("position-a", async () => {
+      const res = await fetchWithBaseUrl("/demo/position-a", "POST", {});
+      if (res) toast.success(res.message || "Position A sent");
+    });
+
+  const runPositionB = () =>
+    runAction("position-b", async () => {
+      const res = await fetchWithBaseUrl("/demo/position-b", "POST", {});
+      if (res) toast.success(res.message || "Position B sent");
+    });
+
   const elements = demoStatus?.elements ?? [];
   const blockingElements = elements.filter((el) => el.state === "error");
   const warnElements = elements.filter((el) => el.state === "warn");
@@ -296,27 +291,6 @@ export function DemoPage() {
   const armStreamFresh =
     lastArmJointAt != null && Date.now() - lastArmJointAt < 1500;
   const go2JointCount = Object.keys(go2Joints?.joints ?? {}).length;
-
-  const nudgeMount = (
-    key: "position" | "rotation",
-    index: 0 | 1 | 2,
-    delta: number,
-  ) => {
-    setArmMount((current) => {
-      const next = {
-        position: [...current.position] as [number, number, number],
-        rotation: [...current.rotation] as [number, number, number],
-      };
-      next[key][index] = Number((next[key][index] + delta).toFixed(4));
-      return next;
-    });
-  };
-
-  const resetMount = () =>
-    setArmMount({
-      position: DEFAULT_ARM_MOUNT_POSITION,
-      rotation: DEFAULT_ARM_MOUNT_ROTATION,
-    });
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -497,19 +471,56 @@ export function DemoPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Dog + mounted arm</CardTitle>
+          <CardTitle>Dog position presets</CardTitle>
           <CardDescription>
-            Go2 URDF (legs from WebRTC lowstate when connected) plus the existing SO-100 STL
-            arm on the back. Arm joints poll from dog follower if connected, else local leader.
+            Go2 movement buttons using position/yaw feedback. Position A drives forward
+            2 m. Position B turns around, moves forward 2 m, then turns back.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2 sm:flex-row">
+          <Button
+            variant="outline"
+            onClick={runPositionA}
+            disabled={busy !== null || !go2Joints?.connected}
+          >
+            {busy === "position-a" ? (
+              <Loader2 className="mr-2 size-4 animate-spin" />
+            ) : (
+              <Play className="mr-2 size-4" />
+            )}
+            Position A
+          </Button>
+          <Button
+            variant="outline"
+            onClick={runPositionB}
+            disabled={busy !== null || !go2Joints?.connected}
+          >
+            {busy === "position-b" ? (
+              <Loader2 className="mr-2 size-4 animate-spin" />
+            ) : (
+              <Play className="mr-2 size-4" />
+            )}
+            Position B
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Go2 camera + marker localization</CardTitle>
+          <CardDescription>
+            Live feed from the configured GO2 setup camera. Marker detection uses this
+            feed for Position A/B localization.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Go2Visualizer
-            joints={go2Joints?.joints ?? {}}
-            armJointAngles={armJointAngles}
-            armMountPosition={armMountPosition}
-            armMountRotation={armMountRotation}
-          />
+          <div className="overflow-hidden rounded-lg border border-border bg-black">
+            <img
+              src="/demo/go2-video?width=960&quality=75"
+              alt="Go2 localization camera feed"
+              className="aspect-video w-full object-contain"
+            />
+          </div>
           <div className="grid gap-2 sm:grid-cols-3">
             <div className="rounded-lg border border-border p-3">
               <div className="text-xs text-muted-foreground">Go2 lowstate</div>
@@ -521,6 +532,23 @@ export function DemoPage() {
               </div>
             </div>
             <div className="rounded-lg border border-border p-3">
+              <div className="text-xs text-muted-foreground">Marker detector</div>
+              <div className="mt-1 flex items-center gap-2 text-sm">
+                <Badge
+                  variant={
+                    markerDetection?.available && (markerDetection?.markers.length ?? 0) > 0
+                      ? "default"
+                      : "outline"
+                  }
+                >
+                  {markerDetection?.available
+                    ? `${markerDetection.markers.length} detected`
+                    : "unavailable"}
+                </Badge>
+                <span>camera_id={go2Setup?.camera_id ?? 0}</span>
+              </div>
+            </div>
+            <div className="rounded-lg border border-border p-3">
               <div className="text-xs text-muted-foreground">Mounted arm joints</div>
               <div className="mt-1 flex items-center gap-2 text-sm">
                 <Badge variant={armStreamFresh ? "default" : "outline"}>
@@ -529,10 +557,6 @@ export function DemoPage() {
                 <span>robot_id={armRobotId}</span>
               </div>
             </div>
-            <div className="rounded-lg border border-border p-3">
-              <div className="text-xs text-muted-foreground">No-jump teleop</div>
-              <div className="mt-1 text-sm">Relative start enabled</div>
-            </div>
           </div>
           <p className="text-sm text-muted-foreground">
             {go2Joints?.connected
@@ -540,86 +564,25 @@ export function DemoPage() {
               : go2Joints?.message ??
                 "No Go2 connected. Joints show at zero until lowstate arrives."}
           </p>
-
-          <div className="rounded-lg border border-border p-3 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-medium text-sm">Arm mount alignment</div>
-                <p className="text-xs text-muted-foreground">
-                  Tune the visual SO-100 mount live. Saved in this browser.
-                </p>
-              </div>
-              <Button variant="outline" size="sm" onClick={resetMount}>
-                Reset
-              </Button>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <div className="text-xs font-medium text-muted-foreground">
-                  Position [forward, height, side]
+          <div className="rounded-lg border border-border p-3">
+            <div className="text-xs text-muted-foreground">Detected markers</div>
+            <div className="mt-2 space-y-1 text-sm">
+              {(markerDetection?.markers ?? []).length > 0 ? (
+                markerDetection?.markers.map((marker) => (
+                  <div key={marker.marker_id} className="font-mono text-xs">
+                    id={marker.marker_id} center=({marker.center_x_px.toFixed(0)},{" "}
+                    {marker.center_y_px.toFixed(0)})
+                    {marker.distance_m != null
+                      ? ` distance=${marker.distance_m.toFixed(2)}m`
+                      : ""}
+                    {marker.yaw_deg != null ? ` yaw=${marker.yaw_deg.toFixed(0)}deg` : ""}
+                  </div>
+                ))
+              ) : (
+                <div className="text-muted-foreground">
+                  {markerDetection?.message ?? "Waiting for marker detector"}
                 </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {(["forward", "height", "side"] as const).map((label, index) => (
-                    <div key={label} className="space-y-1">
-                      <div className="text-xs text-center">{label}</div>
-                      <div className="flex gap-1">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => nudgeMount("position", index as 0 | 1 | 2, -0.01)}
-                        >
-                          -
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => nudgeMount("position", index as 0 | 1 | 2, 0.01)}
-                        >
-                          +
-                        </Button>
-                      </div>
-                      <div className="text-[10px] text-center font-mono text-muted-foreground">
-                        {armMountPosition[index].toFixed(2)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="space-y-2">
-                <div className="text-xs font-medium text-muted-foreground">
-                  Rotation [tilt, yaw, roll]
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {(["tilt", "yaw", "roll"] as const).map((label, index) => (
-                    <div key={label} className="space-y-1">
-                      <div className="text-xs text-center">{label}</div>
-                      <div className="flex gap-1">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            nudgeMount("rotation", index as 0 | 1 | 2, -Math.PI / 18)
-                          }
-                        >
-                          -
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            nudgeMount("rotation", index as 0 | 1 | 2, Math.PI / 18)
-                          }
-                        >
-                          +
-                        </Button>
-                      </div>
-                      <div className="text-[10px] text-center font-mono text-muted-foreground">
-                        {Math.round((armMountRotation[index] * 180) / Math.PI)}deg
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              )}
             </div>
           </div>
         </CardContent>

@@ -1,17 +1,20 @@
 import base64
+import json
 import os
 import random
 import traceback
 from pathlib import Path, PurePath
 from typing import Literal, Union, cast
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from huggingface_hub import HfApi
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from irl_robotics.am.base import ActionModel, TrainingRequest
 from irl_robotics.am.pi05 import Pi05
+from irl_robotics.camera import AllCameras, get_all_cameras
 from irl_robotics.configs import config
 from irl_robotics.models import (
     AdminSettingsRequest,
@@ -58,6 +61,63 @@ router = APIRouter(tags=["pages"])
 # Root directory for the file browser
 ROOT_DIR = str(get_home_app_path() / "recordings")
 INDEX_PATH = get_resources_path() / "dist" / "index.html"
+
+
+class Go2MarkerTarget(BaseModel):
+    marker_id: int = Field(ge=0)
+    x_m: float = 0.0
+    y_m: float = 0.0
+    yaw_deg: float = 0.0
+
+
+class Go2SetupConfig(BaseModel):
+    enabled: bool = False
+    camera_id: int = 0
+    marker_size_m: float = Field(default=0.16, gt=0.0)
+    position_a: Go2MarkerTarget = Field(
+        default_factory=lambda: Go2MarkerTarget(marker_id=10, x_m=0.0, y_m=0.0, yaw_deg=0.0)
+    )
+    position_b: Go2MarkerTarget = Field(
+        default_factory=lambda: Go2MarkerTarget(marker_id=11, x_m=2.0, y_m=0.0, yaw_deg=0.0)
+    )
+
+
+class Go2DetectedMarker(BaseModel):
+    marker_id: int
+    center_x_px: float
+    center_y_px: float
+    distance_m: float | None = None
+    yaw_deg: float | None = None
+
+
+class Go2MarkerDetectionResponse(BaseModel):
+    available: bool
+    enabled: bool
+    camera_id: int
+    message: str
+    markers: list[Go2DetectedMarker] = Field(default_factory=list)
+
+
+def _go2_setup_path() -> Path:
+    return get_home_app_path() / "go2_setup.json"
+
+
+def _load_go2_setup() -> Go2SetupConfig:
+    path = _go2_setup_path()
+    if not path.is_file():
+        return Go2SetupConfig()
+    try:
+        return Go2SetupConfig.model_validate(
+            json.loads(path.read_text(encoding="utf-8"))
+        )
+    except Exception as e:
+        logger.warning(f"Failed to read GO2 setup config: {e}")
+        return Go2SetupConfig()
+
+
+def _save_go2_setup(config_data: Go2SetupConfig) -> None:
+    path = _go2_setup_path()
+    path.write_text(config_data.model_dump_json(indent=2), encoding="utf-8")
 
 
 # Optionally, if you want the dashboard to be served at the root endpoint:
@@ -108,6 +168,117 @@ async def get_admin_settings_token() -> AdminSettingsTokenResponse:
     return AdminSettingsTokenResponse(
         huggingface=login_to_hf(revalidate=False),
         wandb=os.path.exists(str(get_home_app_path()) + "/wandb.token"),
+    )
+
+
+@router.get("/admin/go2-setup", response_model=Go2SetupConfig)
+async def get_go2_setup() -> Go2SetupConfig:
+    return _load_go2_setup()
+
+
+@router.post("/admin/go2-setup", response_model=Go2SetupConfig)
+async def save_go2_setup(config_data: Go2SetupConfig) -> Go2SetupConfig:
+    _save_go2_setup(config_data)
+    return config_data
+
+
+@router.get("/admin/go2-marker-detect", response_model=Go2MarkerDetectionResponse)
+async def detect_go2_markers(
+    cameras: AllCameras = Depends(get_all_cameras),
+) -> Go2MarkerDetectionResponse:
+    setup = _load_go2_setup()
+    try:
+        import cv2
+        import numpy as np
+    except Exception as e:
+        return Go2MarkerDetectionResponse(
+            available=False,
+            enabled=setup.enabled,
+            camera_id=setup.camera_id,
+            message=f"OpenCV unavailable: {e}",
+        )
+
+    aruco = getattr(cv2, "aruco", None)
+    if aruco is None:
+        return Go2MarkerDetectionResponse(
+            available=False,
+            enabled=setup.enabled,
+            camera_id=setup.camera_id,
+            message="cv2.aruco is unavailable. Install opencv-contrib-python for marker detection.",
+        )
+
+    frame = cameras.get_rgb_frame(camera_id=setup.camera_id)
+    if frame is None:
+        return Go2MarkerDetectionResponse(
+            available=True,
+            enabled=setup.enabled,
+            camera_id=setup.camera_id,
+            message="No frame available from configured camera",
+        )
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    dictionary = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+    parameters = aruco.DetectorParameters()
+    if hasattr(aruco, "ArucoDetector"):
+        detector = aruco.ArucoDetector(dictionary, parameters)
+        corners, ids, _ = detector.detectMarkers(gray)
+    else:
+        corners, ids, _ = aruco.detectMarkers(gray, dictionary, parameters=parameters)
+
+    if ids is None or len(ids) == 0:
+        return Go2MarkerDetectionResponse(
+            available=True,
+            enabled=setup.enabled,
+            camera_id=setup.camera_id,
+            message="No markers detected",
+        )
+
+    height, width = gray.shape[:2]
+    focal = float(width)
+    camera_matrix = np.array(
+        [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
+        dtype=np.float32,
+    )
+    distortion = np.zeros((5, 1), dtype=np.float32)
+
+    marker_distances: dict[int, float] = {}
+    marker_yaws: dict[int, float] = {}
+    try:
+        rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(
+            corners, setup.marker_size_m, camera_matrix, distortion
+        )
+        for index, marker_id_array in enumerate(ids):
+            marker_id = int(marker_id_array[0])
+            tvec = tvecs[index][0]
+            marker_distances[marker_id] = float(np.linalg.norm(tvec))
+            rotation_matrix, _ = cv2.Rodrigues(rvecs[index][0])
+            marker_yaws[marker_id] = float(
+                np.degrees(np.arctan2(rotation_matrix[1, 0], rotation_matrix[0, 0]))
+            )
+    except Exception as e:
+        logger.warning(f"GO2 marker pose estimate failed: {e}")
+
+    markers = []
+    for marker_id_array, marker_corners in zip(ids, corners):
+        marker_id = int(marker_id_array[0])
+        points = marker_corners[0]
+        center = points.mean(axis=0)
+        markers.append(
+            Go2DetectedMarker(
+                marker_id=marker_id,
+                center_x_px=float(center[0]),
+                center_y_px=float(center[1]),
+                distance_m=marker_distances.get(marker_id),
+                yaw_deg=marker_yaws.get(marker_id),
+            )
+        )
+
+    return Go2MarkerDetectionResponse(
+        available=True,
+        enabled=setup.enabled,
+        camera_id=setup.camera_id,
+        message=f"Detected {len(markers)} marker(s)",
+        markers=markers,
     )
 
 

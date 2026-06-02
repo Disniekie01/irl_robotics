@@ -343,14 +343,8 @@ class LeaderFollowerThread(threading.Thread):
 
         follower_target = self._relative_follower_target(pair, leader_target)
 
-        follower.control_gripper(
-            open_command=leader._rad_to_open_command(
-                leader_target[leader.GRIPPER_JOINT_INDEX]
-            )
-        )
-
         follower.set_motors_positions(
-            q_target_rad=follower_target, enable_gripper=False
+            q_target_rad=follower_target, enable_gripper=True
         )
 
     def _gravity_compensation_step(
@@ -419,14 +413,8 @@ class LeaderFollowerThread(threading.Thread):
 
         follower_target = self._relative_follower_target(pair, leader_target)
 
-        follower.control_gripper(
-            open_command=leader._rad_to_open_command(
-                leader_target[leader.GRIPPER_JOINT_INDEX]
-            )
-        )
-
         follower.set_motors_positions(
-            q_target_rad=follower_target, enable_gripper=False
+            q_target_rad=follower_target, enable_gripper=True
         )
 
     def _haptic_feedback_step(
@@ -506,14 +494,8 @@ class LeaderFollowerThread(threading.Thread):
 
         follower_target = self._relative_follower_target(pair, leader_target)
 
-        follower.control_gripper(
-            open_command=leader._rad_to_open_command(
-                leader_target[leader.GRIPPER_JOINT_INDEX]
-            )
-        )
-
         follower.set_motors_positions(
-            q_target_rad=follower_target, enable_gripper=False
+            q_target_rad=follower_target, enable_gripper=True
         )
 
 

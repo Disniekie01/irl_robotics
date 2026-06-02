@@ -74,6 +74,7 @@ MOTORS = {
     "wrist_roll": [5, "sts3215"],
     "gripper": [6, "sts3215"],
 }
+MOTOR_NAMES_BY_ID = {int(value[0]): name for name, value in MOTORS.items()}
 SO100_PIDS = {21971, 29987}
 
 
@@ -137,38 +138,52 @@ class MinimalSO100:
                 pass
         self.connected = False
 
-    def _units_to_rad(self, units: np.ndarray) -> np.ndarray:
-        n = len(units)
+    def _units_to_rad(
+        self, units: np.ndarray, motor_ids: list[int] | None = None
+    ) -> np.ndarray:
+        ids = motor_ids or list(MOTOR_NAMES_BY_ID.keys())[: len(units)]
+        indices = [servo_id - 1 for servo_id in ids]
         return (
-            (units - np.asarray(self.config.servos_offsets[:n]))
-            * np.asarray(self.config.servos_offsets_signs[:n])
+            (units - np.asarray([self.config.servos_offsets[i] for i in indices]))
+            * np.asarray([self.config.servos_offsets_signs[i] for i in indices])
             * ((2 * np.pi) / (RESOLUTION - 1))
         )
 
-    def _rad_to_units(self, radians: np.ndarray) -> np.ndarray:
-        n = len(radians)
+    def _rad_to_units(
+        self, radians: np.ndarray, motor_ids: list[int] | None = None
+    ) -> np.ndarray:
+        ids = motor_ids or list(MOTOR_NAMES_BY_ID.keys())[: len(radians)]
+        indices = [servo_id - 1 for servo_id in ids]
         x = (
             radians
-            * np.asarray(self.config.servos_offsets_signs[:n])
+            * np.asarray([self.config.servos_offsets_signs[i] for i in indices])
             * ((RESOLUTION - 1) / (2 * np.pi))
-        ) + np.asarray(self.config.servos_offsets[:n])
+        ) + np.asarray([self.config.servos_offsets[i] for i in indices])
         return x.astype(int)
 
-    def read_rad(self) -> list[float]:
+    def read_rad(self, joints_ids: list[int] | None = None) -> list[float]:
         assert self.bus is not None
-        names = list(MOTORS.keys())
+        motor_ids = joints_ids or list(MOTOR_NAMES_BY_ID.keys())
+        names = [MOTOR_NAMES_BY_ID[servo_id] for servo_id in motor_ids]
         raw = self.bus.read("Present_Position", motor_names=names)
-        return self._units_to_rad(np.asarray(raw, dtype=float)).tolist()
+        return self._units_to_rad(np.asarray(raw, dtype=float), motor_ids).tolist()
 
-    def write_rad(self, angles: list[float]) -> list[float]:
+    def write_rad(
+        self, angles: list[float], joints_ids: list[int] | None = None
+    ) -> list[float]:
         assert self.bus is not None
         arr = np.asarray(angles, dtype=float)
-        units = self._rad_to_units(arr)
-        names = list(MOTORS.keys())
+        motor_ids = joints_ids or list(MOTOR_NAMES_BY_ID.keys())[: len(arr)]
+        if len(arr) != len(motor_ids):
+            raise ValueError(
+                f"angles length ({len(arr)}) must match joints_ids length ({len(motor_ids)})"
+            )
+        names = [MOTOR_NAMES_BY_ID[servo_id] for servo_id in motor_ids]
+        units = self._rad_to_units(arr, motor_ids)
         self.bus.write(
             "Goal_Position",
             values=units.tolist(),
-            motor_names=names[: len(units)],
+            motor_names=names,
         )
         return self.read_rad()
 
@@ -213,11 +228,13 @@ class MinimalSO100:
 class JointsReadRequest(BaseModel):
     unit: Literal["rad", "motor_units", "degrees"] = "rad"
     source: Literal["robot", "sim"] = "robot"
+    joints_ids: list[int] | None = None
 
 
 class JointsWriteRequest(BaseModel):
     angles: list[float]
     unit: Literal["rad", "motor_units", "degrees"] = "rad"
+    joints_ids: list[int] | None = None
 
 
 class MoveAbsoluteRequest(BaseModel):
@@ -278,7 +295,7 @@ async def joints_read(
         raise HTTPException(status_code=400, detail="Only unit=rad supported")
     bot = await _get_robot()
     async with robot_lock:
-        return {"angles": await asyncio.to_thread(bot.read_rad)}
+        return {"angles": await asyncio.to_thread(bot.read_rad, request.joints_ids)}
 
 
 @app.post("/joints/write")
@@ -290,7 +307,9 @@ async def joints_write(
         raise HTTPException(status_code=400, detail="Only unit=rad supported")
     bot = await _get_robot()
     async with robot_lock:
-        angles = await asyncio.to_thread(bot.write_rad, request.angles)
+        angles = await asyncio.to_thread(
+            bot.write_rad, request.angles, request.joints_ids
+        )
         return {"angles": angles}
 
 
@@ -389,11 +408,14 @@ async def ws_joints(websocket: WebSocket, robot_id: int = Query(0)) -> None:
             cmd = msg.get("cmd")
             async with robot_lock:
                 if cmd == "read":
-                    angles = await asyncio.to_thread(bot.read_rad)
+                    angles = await asyncio.to_thread(
+                        bot.read_rad, msg.get("joints_ids")
+                    )
                 elif cmd == "write":
                     angles = await asyncio.to_thread(
                         bot.write_rad,
                         [float(x) for x in msg.get("angles", [])],
+                        msg.get("joints_ids"),
                     )
                 else:
                     await websocket.send_bytes(
